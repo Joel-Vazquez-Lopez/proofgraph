@@ -101,7 +101,7 @@ class DecisionReadinessEvaluator:
             satisfied.append(
                 "Simulated carrier delivery-to-ZIP report (NOT independent verification)."
                 if review.evidence_basis == "SIMULATED" else
-                "Independently corroborated carrier delivery-to-ZIP report (NOT physical receipt)."
+                "Carrier verified delivery-to-ZIP scan (NOT physical receipt)."
             )
             buyer_disputes = any(n.content.get("party") == "BUYER" for n in graph.get_nodes_by_type(NodeType.CLAIM))
             linked = {
