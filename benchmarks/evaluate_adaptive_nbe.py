@@ -176,31 +176,35 @@ def measure(challenge, graph, adaptive):
         and "carrier reports residence delivery" in selected_text
     )
 
-    # Acquisition-attempt proxy: number of inquiries until the first useful
-    # action could acquire relevant evidence; no outcome is fabricated.
-    steps = 0 if action == "act_escalate_human_review" and useful else (1 if useful else 5)
-    if not useful:
-        # Model the impact of unsuccessful / irrelevant questions through real
-        # graph QUESTION history. Stop at a fixed shared five-attempt budget.
-        trial_graph = EvidenceGraph.from_data(graph.dispute_id, graph.to_data().model_dump())
-        steps = 0
+    # A controlled synthetic response model: an oracle-labeled useful action
+    # yields one NEW relevant document, explicitly marked as synthetic and
+    # UNVERIFIED. Other actions yield no useful evidence. This measures
+    # acquisition attempts only, never adjudication or evidence validity.
+    trial_graph = EvidenceGraph.from_data(graph.dispute_id, graph.to_data().model_dump())
+    steps = None if challenge.must_escalate else 5  # right-censored at five
+    if not challenge.must_escalate:
         for i in range(5):
             next_decision = choose(engine, trial_graph)
             next_action = next_decision.chosen_action.action_id if next_decision.chosen_action else None
-            if next_action in challenge.acceptable:
-                steps += 1
+            if next_action in challenge.acceptable and next_action not in challenge.unavailable:
+                before = trial_graph.node_count
+                trial_graph.add_node(
+                    NodeType.EVIDENCE_ITEM, f"Simulated relevant response for {next_action}",
+                    {"action_id": next_action, "is_synthetic": True},
+                    "BENCHMARK_ORACLE", node_id=f"oracle_response_{i}_{next_action}",
+                    origin=EvidenceOrigin.SYNTHETIC_FIXTURE,
+                    verification_status=EvidenceVerificationStatus.UNVERIFIED,
+                )
+                assert trial_graph.node_count == before + 1
+                steps = i + 1
                 break
             if next_action is None or next_action == "act_escalate_human_review":
-                steps = 5
                 break
-            steps += 1
             trial_graph.add_node(
                 NodeType.QUESTION, "Action yielded no discriminating evidence",
                 {"action": {"action_id": next_action}}, "BENCHMARK",
                 node_id=f"bench_attempt_{i}_{next_action}"
             )
-        else:
-            steps = 5
     return dict(action=action, useful=useful, unavailable=unavailable,
                 repeated=repeated, escalation=escalation,
                 unsupported=unsupported, steps=steps)
@@ -221,6 +225,9 @@ def evaluate(seed=7331, variants=4):
 def summarize(rows, label):
     results = [r[2] if label == "Adaptive" else r[3] for r in rows]
     n = len(results)
+    active = [x["steps"] for row, x in zip(rows, results) if not next(
+        ch.must_escalate for ch in CHALLENGES if ch.name == row[0]
+    )]
     return {
         "policy": label,
         "cases": n,
@@ -229,14 +236,14 @@ def summarize(rows, label):
         "repeated_actions": sum(x["repeated"] for x in results),
         "unavailable_actions": sum(x["unavailable"] for x in results),
         "correct_escalation_or_continue": sum(x["escalation"] for x in results),
-        "mean_attempts_to_first_useful_action": round(sum(x["steps"] for x in results) / n, 3),
+        "mean_steps_to_simulated_relevant_artifact": round(sum(active) / len(active), 3),
     }
 
 
 if __name__ == "__main__":
     rows = evaluate()
     print("INDEPENDENT POLICY CHALLENGES: seeded perturbations, 16 templates x 4 = 64")
-    print("Synthetic oracle actions specify useful evidence acquisition, not adjudication.")
+    print("Synthetic oracle issues UNVERIFIED relevant artifacts; five-step censored acquisition, not adjudication.")
     for label in ("Adaptive", "Heuristic"):
         print(summarize(rows, label))
     wins = sorted({name for name, _, new, old in rows if new["useful"] and not old["useful"]})
