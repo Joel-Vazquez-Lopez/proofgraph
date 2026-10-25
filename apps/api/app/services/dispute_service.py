@@ -162,7 +162,10 @@ class DisputeService:
                 source=f"{submission.submitter_role}_UPLOAD",
                 node_id=evidence_item_id,
                 origin=EvidenceOrigin.USER_SUBMITTED,
-                verification_status=EvidenceVerificationStatus.VERIFIED,
+                # SHA-256 and metadata checks establish a local integrity finding,
+                # not the authenticity or factual accuracy of submitted evidence.
+                # Only a separate, auditable corroboration can verify this node.
+                verification_status=EvidenceVerificationStatus.UNVERIFIED,
                 metadata={"integrity": integrity_finding.model_dump()}
             )
             nodes_created.append(ev_node.id)
