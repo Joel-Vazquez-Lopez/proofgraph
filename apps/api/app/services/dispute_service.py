@@ -223,6 +223,19 @@ class DisputeService:
                     "mime_type": mime,
                     "sha256": integrity_finding.sha256_hash,
                     "status": integrity_finding.integrity_status.value,
+                    "action_id": submission.action_id,
+                    # A submitted listing is evidence for comparison, NOT proof
+                    # the listed claims or the uploaded document are authentic.
+                    "kind": (
+                        "merchant_listing"
+                        if submission.action_id == "act_merchant_listing"
+                        and submission.submitter_role.upper() == "MERCHANT"
+                        else "condition_photo"
+                        if submission.action_id == "act_buyer_condition_photo"
+                        and submission.submitter_role.upper() == "BUYER"
+                        and mime.startswith("image/")
+                        else "submitted_file"
+                    ),
                 },
                 source=f"{submission.submitter_role}_UPLOAD",
                 node_id=evidence_item_id,
@@ -299,17 +312,29 @@ class DisputeService:
                 edges_created.extend(carrier_edges)
                 carrier_outcome_note = self._carrier_outcome_message(carrier_result)
 
-        # Close any open question nodes answered by this submission
-        open_questions = graph.get_open_questions()
-        for q in open_questions:
-            if nodes_created:
-                edge_ans = graph.add_edge(
-                    source_id=nodes_created[0],
-                    target_id=q.id,
-                    edge_type=EdgeType.ANSWERS,
-                    provenance=f"Submitted evidence directly addresses question: {q.label}"
-                )
-                edges_created.append(edge_ans.id)
+        # A document cannot answer every open question merely because it was
+        # uploaded. Only link the specifically requested action, and do not
+        # confuse an ANSWERS edge with independent verification.
+        if submission.action_id and nodes_created:
+            eligible = {
+                "act_buyer_condition_photo": "condition_photo",
+                "act_merchant_listing": "merchant_listing",
+                "act_request_transaction_records": "submitted_file",
+                "act_request_transaction_reconciliation": "submitted_file",
+                "act_request_carrier_receipt": "submitted_file",
+                "act_request_signature_or_proof": "submitted_file",
+            }
+            item = graph.get_node(nodes_created[0])
+            if (item and item.type == NodeType.EVIDENCE_ITEM
+                    and item.content.get("kind") == eligible.get(submission.action_id)):
+                for q in graph.get_open_questions():
+                    action = q.content.get("action", {})
+                    if isinstance(action, dict) and action.get("action_id") == submission.action_id:
+                        edge = graph.add_edge(
+                            item.id, q.id, EdgeType.ANSWERS,
+                            "Submitted file responds to requested action; content remains unverified."
+                        )
+                        edges_created.append(edge.id)
 
         # Run Decision-Readiness Evaluator
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
