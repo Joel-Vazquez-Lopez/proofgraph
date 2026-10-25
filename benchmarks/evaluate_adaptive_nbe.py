@@ -49,6 +49,7 @@ CHALLENGES = (
     Challenge("simulated_matching_scan", ("act_request_signature_or_proof",)),
     Challenge("unmatched_without_order_zip", ("act_carrier_lookup", "act_request_carrier_receipt")),
     Challenge("unlinked_delivery_observation", ("act_carrier_lookup",)),
+    Challenge("chronological_update_to_delivery", ("act_request_signature_or_proof",)),
 )
 
 
@@ -76,11 +77,12 @@ def build_challenge(challenge: Challenge, rng: random.Random, index: int):
         graph.add_edge(order.id, shipment.id, EdgeType.RELATES_TO, "fulfillment")
 
     def report(label, dest, *, status="DELIVERED", origin=EvidenceOrigin.VERIFIED_EXTERNAL,
-               verified=True, linked=True):
+               verified=True, linked=True, source="GATEWAY", event_time=None):
         observation = graph.add_node(
             NodeType.OBSERVATION, label,
-            {"status": status, "delivered_to_address": {"postal_code": dest}},
-            "GATEWAY", node_id=f"obs_{index}_{challenge.name}_{label}",
+            {"status": status, "delivered_to_address": {"postal_code": dest},
+             "event_timestamp": event_time},
+            source, node_id=f"obs_{index}_{challenge.name}_{label}",
             origin=origin,
             verification_status=(
                 EvidenceVerificationStatus.VERIFIED if verified else EvidenceVerificationStatus.UNVERIFIED
@@ -120,6 +122,14 @@ def build_challenge(challenge: Challenge, rng: random.Random, index: int):
         report("unknown_destination", order_zip)
     elif name == "unlinked_delivery_observation":
         report("unrelated_report", order_zip, linked=False)
+    elif name == "chronological_update_to_delivery":
+        # An older transit scan was appended *after* a newer delivery scan.
+        # The legacy policy sees the first delivered report; the new qualitative
+        # assessor currently fails to order or supersede scans correctly.
+        report("newer_delivery", order_zip, source="CARRIER_GATEWAY",
+               event_time="2026-10-25T10:00:00Z")
+        report("older_transit", "", status="IN_TRANSIT", source="CARRIER_GATEWAY",
+               event_time="2026-10-24T10:00:00Z")
 
     if name in ("lookup_attempted", "verification_paths_exhausted"):
         attempt("act_carrier_lookup")
@@ -225,7 +235,7 @@ def summarize(rows, label):
 
 if __name__ == "__main__":
     rows = evaluate()
-    print("INDEPENDENT POLICY CHALLENGES: seeded perturbations, 15 templates x 4 = 60")
+    print("INDEPENDENT POLICY CHALLENGES: seeded perturbations, 16 templates x 4 = 64")
     print("Synthetic oracle actions specify useful evidence acquisition, not adjudication.")
     for label in ("Adaptive", "Heuristic"):
         print(summarize(rows, label))
