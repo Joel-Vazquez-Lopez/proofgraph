@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback } from "react";
+import React, { useState, useEffect, useCallback, useRef } from "react";
 import { RefreshCw } from "lucide-react";
 
 import { Header } from "@/components/Header";
@@ -9,6 +9,7 @@ import { CaseOverview } from "@/components/CaseOverview";
 import { ReviewPackageModal } from "@/components/ReviewPackageModal";
 import { AdvancedWorkspace } from "@/components/AdvancedWorkspace";
 import { GraphNodeData } from "@/components/EvidenceGraphView";
+import { getResponseError, isCurrentCase, submissionMessage } from "@/lib/investigation-actions.mjs";
 
 // ─────────────────────────────────────────────
 // Types aligned with the backend API contracts
@@ -65,16 +66,8 @@ function resolveProductName(dispute: DisputeDetail | null, summary: DisputeSumma
 
   // Fallback from evidence graph ORDER node
   const orderNode = dispute?.evidence_graph?.nodes?.find((n: any) => n.type === "ORDER");
+  if (orderNode?.content?.item_name) return orderNode.content.item_name;
   if (orderNode?.content?.item_description) return orderNode.content.item_description;
-
-  // Static fallback fixtures (never used if API returns item_name)
-  const staticMap: Record<string, string> = {
-    "PP-D-INR-8841": "Keychron Q1 Pro Wireless Mechanical Keyboard",
-    "PP-D-INR-9923": "Sony WH-1000XM5 Noise Canceling Headphones",
-    "PP-D-SNAD-3012": "1972 Vintage Chronograph Watch",
-    "PP-D-DUP-4044": "Pro Cloud Hosting (Annual Subscription)",
-  };
-  if (dispute?.dispute_id) return staticMap[dispute.dispute_id] || "Purchased Item";
   return "Purchased Item";
 }
 
@@ -93,10 +86,16 @@ function resolveBuyerName(dispute: DisputeDetail | null, summary: DisputeSummary
 export default function ProofGraphPage() {
   // ── Core Data State ───────────────────────────
   const [disputes, setDisputes] = useState<DisputeSummaryData[]>([]);
-  const [selectedId, setSelectedId] = useState<string>("PP-D-INR-8841");
+  const [selectedId, setSelectedId] = useState<string>("");
   const [dispute, setDispute] = useState<DisputeDetail | null>(null);
   const [loadingList, setLoadingList] = useState(true);
-  const [loadingDetail, setLoadingDetail] = useState(true);
+  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [listError, setListError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const activeCaseRef = useRef("");
+  const detailRequestRef = useRef(0);
+  const listRequestRef = useRef(0);
+  const detailAbortRef = useRef<AbortController | null>(null);
 
   // ── UI State ─────────────────────────────────
   const [showAdvanced, setShowAdvanced] = useState(false);
@@ -114,87 +113,112 @@ export default function ProofGraphPage() {
   // ─────────────────────────────────────────────
 
   const fetchDisputes = useCallback(async () => {
+    const request = ++listRequestRef.current;
     setLoadingList(true);
+    setListError(null);
     try {
       const res = await fetch("/api/v1/disputes");
-      if (res.ok) {
-        const data = await res.json();
-        setDisputes(data);
+      if (!res.ok) throw new Error(await getResponseError(res, "Could not load cases"));
+      const data: DisputeSummaryData[] = await res.json();
+      if (request !== listRequestRef.current) return;
+      setDisputes(data);
+      if (!data.some((item) => item.dispute_id === activeCaseRef.current)) {
+        const nextId = data[0]?.dispute_id || "";
+        activeCaseRef.current = nextId;
+        setSelectedId(nextId);
+        setDispute(null);
+        setFeedback(null);
       }
-    } catch (err) {
-      console.error("Failed to load disputes:", err);
+    } catch (err: any) {
+      if (request === listRequestRef.current) {
+        setListError(err?.message || "Could not load cases.");
+      }
     } finally {
-      setLoadingList(false);
+      if (request === listRequestRef.current) setLoadingList(false);
     }
   }, []);
 
   const fetchDisputeDetail = useCallback(async (id: string) => {
+    if (!id || activeCaseRef.current !== id) return;
+    const request = ++detailRequestRef.current;
+    detailAbortRef.current?.abort();
+    const controller = new AbortController();
+    detailAbortRef.current = controller;
     setLoadingDetail(true);
-    setFeedback(null);
+    setDetailError(null);
+    setDispute(null); // Never display an old case while fetching another.
     setSelectedNode(null);
     setShowReviewModal(false);
     try {
-      const res = await fetch(`/api/v1/disputes/${id}`);
-      if (res.ok) {
-        const data = await res.json();
+      const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}`, { signal: controller.signal });
+      if (!res.ok) throw new Error(await getResponseError(res, "Could not load case details"));
+      const data: DisputeDetail = await res.json();
+      if (isCurrentCase(id, activeCaseRef.current, request, detailRequestRef.current)) {
         setDispute(data);
       }
-    } catch (err) {
-      console.error("Failed to load dispute detail:", err);
+    } catch (err: any) {
+      if (!controller.signal.aborted && isCurrentCase(id, activeCaseRef.current, request, detailRequestRef.current)) {
+        setDetailError(err?.message || "Could not load this investigation.");
+      }
     } finally {
-      setLoadingDetail(false);
+      if (isCurrentCase(id, activeCaseRef.current, request, detailRequestRef.current)) {
+        setLoadingDetail(false);
+      }
     }
   }, []);
 
   const refreshAll = useCallback(async () => {
-    await fetchDisputes();
-    if (selectedId) await fetchDisputeDetail(selectedId);
-  }, [fetchDisputes, fetchDisputeDetail, selectedId]);
+    await Promise.all([fetchDisputes(), activeCaseRef.current ? fetchDisputeDetail(activeCaseRef.current) : Promise.resolve()]);
+  }, [fetchDisputes, fetchDisputeDetail]);
 
-  useEffect(() => {
-    fetchDisputes();
-  }, [fetchDisputes]);
-
+  useEffect(() => { fetchDisputes(); }, [fetchDisputes]);
   useEffect(() => {
     if (selectedId) fetchDisputeDetail(selectedId);
+    else { detailAbortRef.current?.abort(); setDispute(null); setLoadingDetail(false); }
+    return () => detailAbortRef.current?.abort();
   }, [selectedId, fetchDisputeDetail]);
+
+  const selectCase = (id: string) => {
+    if (id === activeCaseRef.current) return;
+    activeCaseRef.current = id;
+    detailAbortRef.current?.abort();
+    ++detailRequestRef.current;
+    setSelectedId(id);
+    setDispute(null);
+    setDetailError(null);
+    setFeedback(null);
+    setShowAdvanced(false);
+    setShowReviewModal(false);
+  };
+
+  const reportActionFeedback = (id: string, type: "success" | "error", message: string) => {
+    if (activeCaseRef.current === id) setFeedback({ type, message });
+  };
 
   // ─────────────────────────────────────────────
   // Action Handlers
   // ─────────────────────────────────────────────
 
   const handleVerifyCarrier = async () => {
-    if (!dispute) return;
+    if (!dispute || carrierVerifying) return;
+    const id = dispute.dispute_id;
     setCarrierVerifying(true);
     setFeedback(null);
     try {
-      const res = await fetch(`/api/v1/disputes/${dispute.dispute_id}/verify-carrier`, {
-        method: "POST",
-      });
-      if (res.ok) {
-        const result = await res.json();
-        setFeedback({
-          type: "success",
-          message: `Delivery record found. The case has moved to: ${result.new_state}. Note: this uses demonstration data, not a live carrier check.`,
-        });
-        await fetchDisputeDetail(dispute.dispute_id);
-        await fetchDisputes();
-      } else {
-        const err = await res.json();
-        setFeedback({
-          type: "error",
-          message: err.detail || "Carrier verification could not be completed.",
-        });
-      }
+      const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}/verify-carrier`, { method: "POST" });
+      if (!res.ok) throw new Error(await getResponseError(res, "Carrier lookup failed"));
+      const result = await res.json();
+      reportActionFeedback(id, "success", submissionMessage("carrier", result, dispute.data_source === "SYNTHETIC_FIXTURE"));
+      await fetchDisputeDetail(id);
+      await fetchDisputes();
     } catch (err: any) {
-      setFeedback({ type: "error", message: err.message });
-    } finally {
-      setCarrierVerifying(false);
-    }
+      reportActionFeedback(id, "error", err?.message || "Carrier lookup failed.");
+    } finally { setCarrierVerifying(false); }
   };
 
   const handleSubmitTracking = async (carrierName: string, trackingNumber: string, notes: string) => {
-    if (!dispute) return;
+    if (!dispute || submitting) return;
+    const id = dispute.dispute_id;
     setSubmitting(true);
     setFeedback(null);
     try {
@@ -206,60 +230,38 @@ export default function ProofGraphPage() {
         verify_carrier_now: true,
         notes,
       };
-      const res = await fetch(`/api/v1/disputes/${dispute.dispute_id}/evidence`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+      const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}/evidence`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
       });
-      if (res.ok) {
-        const result = await res.json();
-        setFeedback({
-          type: "success",
-          message: `Tracking submitted and carrier delivery verified. Case moved to: ${result.new_state}.`,
-        });
-        await fetchDisputeDetail(dispute.dispute_id);
-        await fetchDisputes();
-      } else {
-        const err = await res.json();
-        setFeedback({ type: "error", message: err.detail || "Submission failed." });
-      }
+      if (!res.ok) throw new Error(await getResponseError(res, "Tracking submission failed"));
+      const result = await res.json();
+      reportActionFeedback(id, "success", submissionMessage("tracking", result, dispute.data_source === "SYNTHETIC_FIXTURE"));
+      await fetchDisputeDetail(id);
+      await fetchDisputes();
     } catch (err: any) {
-      setFeedback({ type: "error", message: err.message });
-    } finally {
-      setSubmitting(false);
-    }
+      reportActionFeedback(id, "error", err?.message || "Tracking submission failed.");
+    } finally { setSubmitting(false); }
   };
 
   const handleUploadFile = async (file: File) => {
-    if (!dispute) return;
+    if (!dispute || uploading) return;
+    const id = dispute.dispute_id;
     setUploading(true);
     setFeedback(null);
     try {
       const formData = new FormData();
       formData.append("file", file);
       formData.append("submitter_role", "MERCHANT");
-      formData.append("notes", "Uploaded physical proof of delivery or condition document");
-      const res = await fetch(`/api/v1/disputes/${dispute.dispute_id}/upload-evidence`, {
-        method: "POST",
-        body: formData,
-      });
-      if (res.ok) {
-        const result = await res.json();
-        setFeedback({
-          type: "success",
-          message: `Document verified and added to case. State: ${result.new_state}.`,
-        });
-        await fetchDisputeDetail(dispute.dispute_id);
-        await fetchDisputes();
-      } else {
-        const err = await res.json();
-        setFeedback({ type: "error", message: err.detail || "File upload rejected." });
-      }
+      formData.append("notes", "Merchant-submitted supporting evidence");
+      const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}/upload-evidence`, { method: "POST", body: formData });
+      if (!res.ok) throw new Error(await getResponseError(res, "File upload failed"));
+      const result = await res.json();
+      reportActionFeedback(id, "success", submissionMessage("upload", result, dispute.data_source === "SYNTHETIC_FIXTURE"));
+      await fetchDisputeDetail(id);
+      await fetchDisputes();
     } catch (err: any) {
-      setFeedback({ type: "error", message: err.message });
-    } finally {
-      setUploading(false);
-    }
+      reportActionFeedback(id, "error", err?.message || "File upload failed.");
+    } finally { setUploading(false); }
   };
 
   // ─────────────────────────────────────────────
@@ -287,21 +289,22 @@ export default function ProofGraphPage() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
 
           {/* ── Left Column: Case List (4 cols) ── */}
-          <section className="lg:col-span-4 sticky top-[72px]">
-            {loadingList ? (
+          <section aria-label="Dispute cases" className="lg:col-span-4 lg:sticky lg:top-[72px]">
+            {loadingList && disputes.length === 0 ? (
               <div className="bg-white rounded-2xl border border-slate-200 p-8 flex flex-col items-center gap-3 text-slate-500">
                 <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
                 <span className="text-xs font-semibold">Loading cases…</span>
               </div>
             ) : (
-              <CaseList
-                disputes={disputes}
-                selectedId={selectedId}
-                onSelectCase={(id) => {
-                  setSelectedId(id);
-                  setShowAdvanced(false);
-                }}
-              />
+              <div className="space-y-3">
+                {listError && (
+                  <div role="alert" className="p-3 bg-rose-50 border border-rose-200 rounded-xl text-xs text-rose-900">
+                    <p>{listError}</p>
+                    <button type="button" onClick={fetchDisputes} className="mt-2 font-bold underline focus-visible:ring-2 focus-visible:ring-rose-600">Retry loading cases</button>
+                  </div>
+                )}
+                <CaseList disputes={disputes} selectedId={selectedId} onSelectCase={selectCase} />
+              </div>
             )}
           </section>
 
@@ -312,10 +315,19 @@ export default function ProofGraphPage() {
                 <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
                 <span className="text-xs font-semibold">Loading case details…</span>
               </div>
-            ) : dispute ? (
+            ) : detailError ? (
+              <div role="alert" className="bg-white rounded-2xl border border-rose-200 p-8 space-y-3 text-rose-900">
+                <h2 className="font-bold text-sm">Could not load this investigation</h2>
+                <p className="text-xs">{detailError}</p>
+                {feedback && <p className="text-xs">{feedback.message}</p>}
+                <button type="button" onClick={() => fetchDisputeDetail(selectedId)}
+                  className="px-4 py-2 bg-slate-900 text-white rounded-lg text-xs font-semibold focus-visible:ring-2 focus-visible:ring-blue-600">Retry case details</button>
+              </div>
+            ) : dispute?.dispute_id === selectedId ? (
               <>
                 {/* Primary investigation flow: What happened / What we know / What to do */}
                 <CaseOverview
+                  key={dispute.dispute_id}
                   dispute={dispute}
                   productName={productName}
                   buyerName={buyerName}
@@ -340,7 +352,7 @@ export default function ProofGraphPage() {
               </>
             ) : (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 flex flex-col items-center gap-3 text-slate-500">
-                <span className="text-sm font-semibold">Select a case from the list to begin investigation.</span>
+                <span className="text-sm font-semibold">{selectedId ? "No case details available. Retry or select another case." : "Select a case to begin investigation."}</span>
               </div>
             )}
           </section>
@@ -348,7 +360,7 @@ export default function ProofGraphPage() {
       </main>
 
       {/* ── Review Package Modal (overlaid, not inline) ── */}
-      {dispute && (
+      {dispute?.dispute_id === selectedId && (
         <ReviewPackageModal
           isOpen={showReviewModal}
           onClose={() => setShowReviewModal(false)}
