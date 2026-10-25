@@ -304,7 +304,9 @@ export default function ProofGraphPage() {
                     <button type="button" onClick={fetchDisputes} className="mt-2 font-bold underline focus-visible:ring-2 focus-visible:ring-rose-600">Retry loading cases</button>
                   </div>
                 )}
-                <CaseList disputes={disputes} selectedId={selectedId} onSelectCase={selectCase} />
+                {(disputes.length > 0 || !listError) && (
+                  <CaseList disputes={disputes} selectedId={selectedId} onSelectCase={selectCase} />
+                )}
               </div>
             )}
           </section>
