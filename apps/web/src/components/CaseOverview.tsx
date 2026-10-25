@@ -19,6 +19,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
+import { merchantNextStep } from "@/lib/merchant-workflow.mjs";
 
 interface CaseOverviewProps {
   dispute: any;
@@ -48,7 +49,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
   feedback,
 }) => {
   const [carrier, setCarrier] = useState("USPS");
-  const [trackingNumber, setTrackingNumber] = useState("940010009999");
+  const [trackingNumber, setTrackingNumber] = useState("");
   const [showOriginalStatements, setShowOriginalStatements] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [confirmCheck, setConfirmCheck] = useState(false);
@@ -86,6 +87,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
   const deliveredDestination = carrierObservation?.content?.delivered_to_address;
   const formatLocation = (address: any): string =>
     [address?.city, address?.state, address?.postal_code].filter(Boolean).join(", ");
+  const nextStep = merchantNextStep({ isReady, isReview, category: dispute.category, hasTracking, hasDeliveryRecord });
 
   const getHumanCategory = (cat: string) => {
     if (cat === "ITEM_NOT_RECEIVED") return "Item not received";
@@ -140,6 +142,8 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
       {/* Feedback Banner */}
       {feedback && (
         <div
+          role={feedback.type === "error" ? "alert" : "status"}
+          aria-live={feedback.type === "error" ? "assertive" : "polite"}
           className={`p-4 rounded-2xl border text-xs flex items-start gap-3 animate-in fade-in duration-200 ${
             feedback.type === "success"
               ? "bg-emerald-50 border-emerald-200 text-emerald-900"
@@ -161,13 +165,13 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
 
       {/* SECTION 1: WHAT HAPPENED? */}
       <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-xs space-y-4">
-        <div className="flex items-start justify-between gap-4 pb-3 border-b border-slate-100">
-          <div>
+        <div className="flex flex-col sm:flex-row items-start justify-between gap-3 sm:gap-4 pb-3 border-b border-slate-100">
+          <div className="min-w-0">
             <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
               What happened
             </span>
-            <div className="flex items-center gap-2 mt-0.5">
-              <h2 className="text-lg font-extrabold text-slate-900 tracking-tight leading-tight">
+            <div className="flex flex-wrap items-center gap-2 mt-0.5">
+              <h2 className="min-w-0 break-words text-lg font-extrabold text-slate-900 tracking-tight leading-tight">
                 {productName}
               </h2>
               <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 border border-slate-200 shrink-0">
@@ -175,7 +179,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
               </span>
             </div>
           </div>
-          <div className="text-right shrink-0">
+          <div className="text-left sm:text-right shrink-0">
             <span className="text-xl font-black text-slate-900">
               ${dispute.amount.toFixed(2)}{" "}
               <span className="text-xs font-semibold text-slate-400">{dispute.currency}</span>
@@ -341,6 +345,17 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                       </div>
                     </div>
                   ))}
+                  {missingReqs.map((requirement: string, idx: number) => (
+                    <div key={idx} className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
+                      <div>
+                        <span className="font-semibold">Also still needed</span>
+                        <p className="text-[11px] text-amber-800/90 mt-0.5">
+                          {requirement.replace(/_/g, " ")}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </>
               ) : isItemNotReceived && !hasTracking ? (
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">
@@ -401,7 +416,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
         </div>
 
         {/* READY */}
-        {isReady ? (
+        {nextStep === "review" ? (
           <div className="flex items-start gap-4">
             <div className="w-11 h-11 rounded-2xl bg-emerald-100 flex items-center justify-center shrink-0">
               <ShieldCheck className="w-5 h-5 text-emerald-700" />
@@ -428,7 +443,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
 
         /* CONTRADICTION / REVIEW REQUIRED */
-        ) : isReview ? (
+        ) : nextStep === "human-review" ? (
           <div className="flex items-start gap-4">
             <div className="w-11 h-11 rounded-2xl bg-rose-100 flex items-center justify-center shrink-0">
               <AlertOctagon className="w-5 h-5 text-rose-700" />
@@ -471,7 +486,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
 
         /* MISSING TRACKING */
-        ) : isItemNotReceived && !hasTracking ? (
+        ) : nextStep === "submit-tracking" ? (
           <div className="flex items-start gap-4">
             <div className="w-11 h-11 rounded-2xl bg-blue-100 flex items-center justify-center shrink-0">
               <Truck className="w-5 h-5 text-blue-700" />
@@ -483,7 +498,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                 </h3>
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
                   To check whether this item was delivered, please enter the carrier and tracking number from your shipping records.
-                  This will save the tracking details — delivery will not be confirmed automatically until a carrier check is run.
+                  Saving tracking does not itself verify delivery. The API may also attempt a simulated carrier lookup on demonstration cases.
                 </p>
               </div>
 
@@ -515,7 +530,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                 </div>
 
                 <p className="text-[11px] text-slate-500">
-                  After saving, ProofGraph will attempt to check the carrier's delivery record using demonstration data.
+                  Carrier lookup results depend on case configuration. Demonstration fixtures must not be treated as independent checks.
                 </p>
 
                 <button
@@ -535,7 +550,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
 
         /* TRACKING ON FILE, NOT YET CHECKED */
-        ) : isItemNotReceived && !hasDeliveryRecord ? (
+        ) : nextStep === "carrier-lookup" ? (
           <div className="flex items-start gap-4">
             <div className="w-11 h-11 rounded-2xl bg-amber-100 flex items-center justify-center shrink-0">
               <Clock className="w-5 h-5 text-amber-700" />
@@ -584,7 +599,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
 
         /* SNAD — UPLOAD NEEDED */
-        ) : dispute.category === "SIGNIFICANTLY_NOT_AS_DESCRIBED" ? (
+        ) : nextStep === "upload-condition" ? (
           <div className="flex items-start gap-4">
             <div className="w-11 h-11 rounded-2xl bg-indigo-100 flex items-center justify-center shrink-0">
               <Upload className="w-5 h-5 text-indigo-700" />
@@ -601,8 +616,9 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
 
               <form onSubmit={handleFileUpload} className="space-y-3 max-w-sm">
                 <input
+                  aria-label="Choose supporting condition document"
                   type="file"
-                  accept="image/*,application/pdf"
+                  accept="image/png,image/jpeg,image/webp,application/pdf"
                   onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                   className="block w-full text-xs text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100"
                 />
@@ -622,8 +638,17 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
         ) : (
           <div className="space-y-3">
             <p className="text-xs text-slate-600 leading-relaxed">
+              {dispute.current_policy_decision?.chosen_action?.title && (
+                <span className="block font-bold text-slate-900 mb-1">
+                  Recommended: {dispute.current_policy_decision.chosen_action.title}
+                </span>
+              )}
               {dispute.current_policy_decision?.chosen_action?.description ||
-                "Records are being gathered. Check back shortly for the next recommended step."}
+                dispute.readiness?.rationale ||
+                "Review the available records and follow up with the appropriate party."}
+            </p>
+            <p className="text-[11px] text-amber-800 bg-amber-50 rounded-lg p-2 border border-amber-200">
+              Manual follow-up required. This recommendation is guidance only; no automated action will run from this screen.
             </p>
             <button
               onClick={onOpenReviewModal}
