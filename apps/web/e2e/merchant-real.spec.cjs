@@ -118,6 +118,17 @@ test("real backend: merchant investigates, saves tracking, checks carrier, revie
   await expect(page.getByText("Add a photo or document")).toBeVisible();
   const file = page.getByRole("button", { name: "Choose supporting condition document" })
     .or(page.getByLabel("Choose supporting condition document"));
+  // Malformed image is rejected by the REAL backend signature validator.
+  await file.setInputFiles({
+    name: "bad-image.png", mimeType: "image/png", buffer: Buffer.from("not-a-png"),
+  });
+  const rejectedUpload = page.waitForResponse((r) =>
+    r.request().method() === "POST" && r.url().endsWith("/PP-D-SNAD-3012/upload-evidence")
+  );
+  await page.getByRole("button", { name: "Save document" }).click();
+  expect((await rejectedUpload).status()).toBe(400);
+  await expect(page.getByRole("alert").filter({ hasText: /Invalid file format: content signature/ })).toBeVisible();
+  // Correct the selection and retry without refreshing or losing the case.
   await file.setInputFiles({ name: "lens-condition.png", mimeType: "image/png", buffer: png });
   const uploadResponse = page.waitForResponse((r) =>
     r.request().method() === "POST" && r.url().endsWith("/PP-D-SNAD-3012/upload-evidence")
