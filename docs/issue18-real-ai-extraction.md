@@ -50,6 +50,8 @@ pytest -v apps/api/tests/test_ai_claim_extractor.py::test_optional_live_openai_c
 
 The live test makes a **real outbound OpenAI API call**, fails if the response is not quote-grounded, and never exposes the key. **This smoke test is skipped in default CI**; no live-model verification is claimed without it.
 
+Alternatively, set the repository Actions secret `OPENAI_API_KEY` and manually start [Live OpenAI Claim Extraction (manual)](https://github.com/Joel-Vazquez-Lopez/proofgraph/actions/workflows/live-ai-smoke.yml) using **Run workflow** on the PR branch. The workflow fails explicitly when the secret is missing; it does not substitute a mock result.
+
 You can also call the endpoint as a reviewer through the web UI or with:
 
 ```bash
