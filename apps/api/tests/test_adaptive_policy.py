@@ -4,6 +4,7 @@ import pytest
 from app.services.evidence_graph import EvidenceGraph
 from app.services.evaluator import DecisionReadinessEvaluator
 from app.services.nbe_adaptive import HypothesisDiscriminationPolicy
+from app.services.hypothesis_engine import assess_inr_hypotheses
 from app.services.nbe_policy import HeuristicNBEPolicy
 from packages.shared_schemas.models import (
     DisputeCategory, EdgeType, EvidenceOrigin, EvidenceVerificationStatus,
@@ -200,3 +201,11 @@ def test_unsupported_category_delegates_to_baseline():
         DisputeCategory.DUPLICATE_TRANSACTION, graph, ready
     )
     assert actual.policy_name == "HeuristicNBEPolicy"
+
+def test_physical_receipt_hypotheses_remain_unresolved_after_matching_scan():
+    graph, _, shipment = case()
+    scan(graph, shipment, "matched_delivery")
+    assessments = {a.hypothesis_id: a for a in assess_inr_hypotheses(graph).assessments}
+    assert assessments["carrier_delivered_to_order_postal_code"].status == "SUPPORTED"
+    assert assessments["buyer_physically_received_item"].status == "UNRESOLVED"
+    assert assessments["nonreceipt_due_to_loss_or_misdelivery"].status == "UNRESOLVED"
