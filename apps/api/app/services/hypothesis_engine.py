@@ -112,6 +112,18 @@ def assess_inr_hypotheses(graph: EvidenceGraph) -> HypothesisReview:
         _assessment(_HYPOTHESES[0], tuple(matching), tuple(different)),
         _assessment(_HYPOTHESES[1], tuple(different), tuple(matching)),
         _assessment(_HYPOTHESES[2], tuple(transit), tuple(delivered)),
+        # Carrier location reports cannot distinguish actual receipt from later
+        # loss, theft, same-ZIP misdelivery, or an incorrect delivery report.
+        # These physical alternatives remain explicitly unresolved; no
+        # posterior probabilities or receipt claims are inferred.
+        HypothesisAssessment(
+            "buyer_physically_received_item", "UNRESOLVED",
+            explanation="A carrier scan or postal-code match does not prove actual buyer possession.",
+        ),
+        HypothesisAssessment(
+            "nonreceipt_due_to_loss_or_misdelivery", "UNRESOLVED",
+            explanation="No independently corroborated chain of custody distinguishes loss, theft, or misdelivery.",
+        ),
     )
     if any(a.status == "CONFLICTED" for a in result) or (transit and delivered):
         next_action = "act_resolve_contradiction"
