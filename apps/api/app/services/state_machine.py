@@ -39,7 +39,8 @@ class InvestigationStateMachine:
             InvestigationState.CLOSED,
         },
         InvestigationState.DECISION_READY: {
-            InvestigationState.INVESTIGATING,  # If new contradictory evidence arrives
+            InvestigationState.INVESTIGATING,  # Newly missing/uncertain evidence
+            InvestigationState.REVIEW_REQUIRED,  # Newly discovered material contradiction
             InvestigationState.CLOSED,
         },
         InvestigationState.CLOSED: set(),  # Terminal state
