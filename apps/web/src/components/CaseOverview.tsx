@@ -64,16 +64,34 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
   const nodes = dispute.evidence_graph?.nodes || [];
   const shipmentNode = nodes.find((n: any) => n.type === "SHIPMENT");
   const orderNode = nodes.find((n: any) => n.type === "ORDER");
+  const transactionNode = nodes.find((n: any) => n.type === "TRANSACTION");
+  const isItemNotReceived = dispute.category === "ITEM_NOT_RECEIVED";
 
-  const hasTracking = !!shipmentNode;
-  // Only mark as carrier-verified when the backend explicitly sets VERIFIED_EXTERNAL
-  const isCarrierVerified = shipmentNode?.verification_status === "VERIFIED_EXTERNAL";
+  const hasTracking = !!shipmentNode?.content?.tracking_number;
+  // The API separates verification_status (VERIFIED/UNVERIFIED) from origin.
+  // A synthetic record must never be described as independent verification.
+  const carrierObservation = nodes.find(
+    (n: any) =>
+      n.type === "OBSERVATION" &&
+      hasTracking &&
+      n.content?.tracking_number === shipmentNode.content.tracking_number &&
+      typeof n.content?.status === "string"
+  );
+  const hasDeliveryRecord =
+    carrierObservation?.verification_status === "VERIFIED" &&
+    carrierObservation?.content?.status === "DELIVERED";
+  const isDemoDeliveryRecord = hasDeliveryRecord && carrierObservation?.origin === "SYNTHETIC_FIXTURE";
+  const isExternalDeliveryRecord = hasDeliveryRecord && carrierObservation?.origin === "VERIFIED_EXTERNAL";
+  const orderDestination = orderNode?.content?.destination_address;
+  const deliveredDestination = carrierObservation?.content?.delivered_to_address;
+  const formatLocation = (address: any): string =>
+    [address?.city, address?.state, address?.postal_code].filter(Boolean).join(", ");
 
   const getHumanCategory = (cat: string) => {
     if (cat === "ITEM_NOT_RECEIVED") return "Item not received";
     if (cat === "SIGNIFICANTLY_NOT_AS_DESCRIBED") return "Item not as described";
     if (cat === "UNAUTHORIZED_TRANSACTION") return "Unauthorized transaction";
-    if (cat === "DUPLICATE_CHARGE") return "Duplicate charge";
+    if (cat === "DUPLICATE_TRANSACTION") return "Duplicate transaction";
     return cat.replace(/_/g, " ").toLowerCase();
   };
 
@@ -81,20 +99,22 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
   const getConciseSummary = () => {
     if (dispute.category === "ITEM_NOT_RECEIVED") {
       if (!hasTracking) {
-        return "The customer says the order never arrived. The merchant reports it was shipped, but no tracking record has been provided yet. Delivery cannot be confirmed.";
-      }
-      if (!isCarrierVerified) {
-        return "The customer says the order never arrived. A tracking number has been recorded, but delivery has not yet been checked with the carrier.";
+        return "The customer says the order never arrived. Shipping records do not yet include tracking information, so delivery cannot be confirmed.";
       }
       if (contradictions.length > 0) {
-        return "The customer says the order never arrived. A delivery record is available, but the destination address in that record does not match the order address. This needs review.";
+        return "The customer disputes delivery. The available records contain a discrepancy that needs human review.";
       }
-      return "The customer says the order never arrived. Payment and delivery records have been checked. The case is ready for a human to review and decide.";
+      if (!hasDeliveryRecord) {
+        return "The customer disputes delivery. Tracking is recorded, but a confirmed delivery record is not available in this case.";
+      }
+      return isDemoDeliveryRecord
+        ? "The customer disputes delivery. Simulated carrier records show delivery; no live carrier confirmation has been obtained."
+        : "The customer disputes delivery. A delivery record is on file, but a human must decide the case.";
     }
     if (dispute.category === "SIGNIFICANTLY_NOT_AS_DESCRIBED") {
-      return "The customer says the item they received does not match the listing. We have payment and order records. A photo or condition document from the merchant would help clarify.";
+      return "The customer says the received item did not match its description. Listing details and condition evidence can help clarify the claim.";
     }
-    if (dispute.category === "DUPLICATE_CHARGE") {
+    if (dispute.category === "DUPLICATE_TRANSACTION") {
       return "The customer says they were charged twice for the same order. We are checking transaction records to see whether both charges settled.";
     }
     if (dispute.category === "UNAUTHORIZED_TRANSACTION") {
@@ -242,22 +262,23 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
               <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200/60 text-slate-800 flex items-start gap-2.5">
                 <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
                 <div>
-                  <span className="font-semibold">Payment confirmed</span>
+                  <span className="font-semibold">Payment record on file</span>
                   <p className="text-[11px] text-slate-600 mt-0.5">
-                    ${dispute.amount.toFixed(2)} {dispute.currency} processed via PayPal for {productName}.
-                    This is from PayPal's own transaction records.
+                    ${dispute.amount.toFixed(2)} {dispute.currency} recorded for {productName}.
+                    {transactionNode?.origin === "SYNTHETIC_FIXTURE" || dispute.data_source === "SYNTHETIC_FIXTURE"
+                      ? " This entry comes from demonstration data."
+                      : " Source and verification details are available in the evidence record."}
                   </p>
                 </div>
               </div>
 
-              {orderNode?.content?.shipping_address && (
+              {orderDestination && (
                 <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200/60 text-slate-800 flex items-start gap-2.5">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
                   <div>
                     <span className="font-semibold">Delivery destination on order</span>
                     <p className="text-[11px] text-slate-600 mt-0.5">
-                      {orderNode.content.shipping_address.city},{" "}
-                      {orderNode.content.shipping_address.state} — as recorded at checkout.
+                      {formatLocation(orderDestination)} — as recorded in the order evidence.
                     </p>
                   </div>
                 </div>
@@ -271,22 +292,29 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                     <p className="text-[11px] text-slate-600 mt-0.5">
                       {shipmentNode.content?.carrier_name} tracking{" "}
                       <span className="font-mono">{shipmentNode.content?.tracking_number}</span>{" "}
-                      — provided by the merchant. Delivery status is{" "}
-                      {isCarrierVerified ? "checked with the carrier (demonstration data)" : "not yet checked"}.
+                      — on file for this case.{" "}
+                      {isDemoDeliveryRecord
+                        ? "Simulated carrier data shows delivery; no live check was made."
+                        : isExternalDeliveryRecord
+                        ? "An independently sourced carrier record shows delivery."
+                        : "Delivery is not confirmed by available carrier evidence."}
                     </p>
                   </div>
                 </div>
               )}
 
-              {isCarrierVerified && (
+              {hasDeliveryRecord && (
                 <div className="p-3 rounded-xl bg-emerald-50/60 border border-emerald-200/60 text-slate-800 flex items-start gap-2.5">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
                   <div>
-                    <span className="font-semibold">Delivery record available</span>
+                    <span className="font-semibold">Delivery record on file</span>
                     <p className="text-[11px] text-slate-600 mt-0.5">
-                      Delivery to {shipmentNode.content?.delivery_address?.city},{" "}
-                      {shipmentNode.content?.delivery_address?.state} is shown in demonstration records.
-                      This is synthetic data, not a live carrier check.
+                      {formatLocation(deliveredDestination) || "A destination"} is recorded as the delivery location.{" "}
+                      {isDemoDeliveryRecord
+                        ? "This is synthetic demonstration data, not a live carrier check."
+                        : isExternalDeliveryRecord
+                        ? "This record has independently verified carrier provenance."
+                        : "This record's origin has not been independently verified."}
                     </p>
                   </div>
                 </div>
@@ -306,15 +334,15 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                     <div key={idx} className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-950 flex items-start gap-2.5">
                       <AlertOctagon className="w-3.5 h-3.5 text-rose-600 mt-0.5 shrink-0" />
                       <div>
-                        <span className="font-semibold text-rose-900">These delivery details don't match</span>
+                        <span className="font-semibold text-rose-900">Conflicting evidence</span>
                         <p className="text-[11px] text-rose-800/90 mt-0.5 leading-relaxed">
-                          {c} — The delivery record is part of our demonstration data and has not been independently checked with the carrier.
+                          {c} — The underlying records and their sources need human review.
                         </p>
                       </div>
                     </div>
                   ))}
                 </>
-              ) : !hasTracking ? (
+              ) : isItemNotReceived && !hasTracking ? (
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">
                   <Clock className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
                   <div>
@@ -324,13 +352,25 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                     </p>
                   </div>
                 </div>
-              ) : !isCarrierVerified ? (
+              ) : missingReqs.length > 0 ? (
+                missingReqs.map((requirement: string, idx: number) => (
+                  <div key={idx} className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">
+                    <Clock className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
+                    <div>
+                      <span className="font-semibold">Still needed</span>
+                      <p className="text-[11px] text-amber-800/90 mt-0.5">
+                        {requirement.replace(/_/g, " ")}
+                      </p>
+                    </div>
+                  </div>
+                ))
+              ) : isItemNotReceived && !hasDeliveryRecord ? (
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">
                   <Clock className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
                   <div>
-                    <span className="font-semibold">Delivery not yet checked</span>
+                    <span className="font-semibold">Delivery not confirmed</span>
                     <p className="text-[11px] text-amber-800/90 mt-0.5">
-                      The tracking number is recorded, but we haven't checked the carrier yet to confirm delivery.
+                      The case has tracking information, but no confirmed delivery record on file.
                     </p>
                   </div>
                 </div>
@@ -338,9 +378,11 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                 <div className="p-3 rounded-xl bg-slate-50 border border-slate-100 text-slate-700 flex items-start gap-2.5">
                   <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500 mt-0.5 shrink-0" />
                   <div>
-                    <span className="font-semibold text-slate-900">No open questions</span>
+                    <span className="font-semibold text-slate-900">No other missing requirements listed</span>
                     <p className="text-[11px] text-slate-600 mt-0.5">
-                      All required records are in. The case is ready for a human reviewer to decide.
+                      {isReady
+                        ? "The available records are ready for human review."
+                        : "The investigation is ongoing; a human reviewer may still need to resolve the case."}
                     </p>
                   </div>
                 </div>
@@ -394,25 +436,28 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
             <div className="flex-1 space-y-3">
               <div>
                 <h3 className="text-sm font-bold text-rose-950">
-                  These delivery details don't match — human review needed.
+                  Conflicting evidence — human review needed.
                 </h3>
                 <p className="text-xs text-rose-900/80 mt-1 leading-relaxed">
-                  The order lists <strong>Seattle, WA</strong> as the destination, but the available delivery record lists <strong>Portland, OR</strong>.
-                  The delivery record is part of our demonstration data and has not been independently checked with the carrier.
-                  This discrepancy needs a human to review it — ProofGraph cannot resolve it automatically.
+                  {contradictions.length > 0
+                    ? contradictions.join(" ")
+                    : dispute.readiness?.rationale || "Some records need further review."}{" "}
+                  ProofGraph cannot resolve conflicting evidence automatically; a human must inspect the sources.
                 </p>
               </div>
 
-              <div className="grid grid-cols-2 gap-3 p-3 bg-rose-50/80 rounded-xl border border-rose-200/80 text-xs">
-                <div>
-                  <span className="font-bold text-rose-900 uppercase text-[10px] tracking-wide">Order destination</span>
-                  <p className="text-slate-800 font-medium mt-0.5">Seattle, WA</p>
+              {orderDestination && deliveredDestination && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-3 bg-rose-50/80 rounded-xl border border-rose-200/80 text-xs">
+                  <div>
+                    <span className="font-bold text-rose-900 uppercase text-[10px] tracking-wide">Order destination</span>
+                    <p className="text-slate-800 font-medium mt-0.5">{formatLocation(orderDestination)}</p>
+                  </div>
+                  <div>
+                    <span className="font-bold text-rose-900 uppercase text-[10px] tracking-wide">Delivery record shows</span>
+                    <p className="text-slate-800 font-medium mt-0.5">{formatLocation(deliveredDestination)}</p>
+                  </div>
                 </div>
-                <div>
-                  <span className="font-bold text-rose-900 uppercase text-[10px] tracking-wide">Delivery record shows</span>
-                  <p className="text-slate-800 font-medium mt-0.5">Portland, OR</p>
-                </div>
-              </div>
+              )}
 
               <button
                 onClick={onOpenReviewModal}
@@ -426,7 +471,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
 
         /* MISSING TRACKING */
-        ) : !hasTracking ? (
+        ) : isItemNotReceived && !hasTracking ? (
           <div className="flex items-start gap-4">
             <div className="w-11 h-11 rounded-2xl bg-blue-100 flex items-center justify-center shrink-0">
               <Truck className="w-5 h-5 text-blue-700" />
@@ -490,7 +535,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
 
         /* TRACKING ON FILE, NOT YET CHECKED */
-        ) : !isCarrierVerified ? (
+        ) : isItemNotReceived && !hasDeliveryRecord ? (
           <div className="flex items-start gap-4">
             <div className="w-11 h-11 rounded-2xl bg-amber-100 flex items-center justify-center shrink-0">
               <Clock className="w-5 h-5 text-amber-700" />
@@ -503,8 +548,10 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
                   Tracking number{" "}
                   <span className="font-mono text-slate-800">{shipmentNode?.content?.tracking_number}</span>{" "}
-                  was provided by the merchant. ProofGraph can look up the delivery record using demonstration carrier data.
-                  This is not a live check — it uses synthetic fixture data for this demo.
+                  is on file. ProofGraph can look up delivery details using the configured source for this case.
+                  {dispute.data_source === "SYNTHETIC_FIXTURE"
+                    ? "This is a simulation using fixture data, not a live carrier lookup."
+                    : "A live carrier lookup may be unavailable; absence of a record does not confirm delivery."}
                 </p>
               </div>
 
@@ -517,7 +564,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                   className="mt-0.5 w-3.5 h-3.5 rounded border-slate-300 text-amber-600 focus:ring-amber-500"
                 />
                 <span className="text-xs text-slate-600 group-hover:text-slate-800 transition-colors">
-                  I understand this uses demonstration data and is not a live carrier lookup.
+                  I understand this lookup may use demonstration data and does not necessarily provide independent verification.
                 </span>
               </label>
 
