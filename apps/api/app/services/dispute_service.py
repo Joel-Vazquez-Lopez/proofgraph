@@ -26,6 +26,8 @@ from app.services.state_machine import InvestigationStateMachine
 from app.services.evidence_graph import EvidenceGraph
 from app.services.evaluator import DecisionReadinessEvaluator
 from app.services.nbe_policy import HeuristicNBEPolicy
+from app.services.nbe_adaptive import HypothesisDiscriminationPolicy
+from app.config import settings
 from app.services.image_integrity import EvidenceIntegrityAnalyzer
 from app.services.carrier_service import CarrierVerificationService, CarrierVerificationResult
 from app.adapters.synthetic import SyntheticDisputeAdapter
@@ -38,6 +40,19 @@ class DisputeService:
         self.synthetic_adapter = SyntheticDisputeAdapter()
         self.paypal_adapter = PayPalSandboxAdapter()
         self.nbe_policy = HeuristicNBEPolicy()
+
+    def _investigation_policy(self, category, graph, readiness, data_source):
+        """Select the opt-in policy without changing existing API/state contracts.
+
+        No independent live carrier gateway is configured in current Backend.
+        Synthetic carrier lookup is available only for synthetic demo cases.
+        """
+        if settings.NBE_POLICY_TYPE == "discriminative":
+            policy = HypothesisDiscriminationPolicy(availability={
+                "act_carrier_lookup": data_source == DataSourceType.SYNTHETIC_FIXTURE,
+            })
+            return policy.evaluate_candidates(category, graph, readiness)
+        return self.nbe_policy.evaluate_candidates(category, graph, readiness)
 
     def list_disputes(self) -> List[DisputeSummary]:
         self._ensure_seed_scenarios()
@@ -241,7 +256,7 @@ class DisputeService:
         new_state = InvestigationStateMachine.transition(current_state, readiness.recommended_state)
 
         # Update NBE Policy Decision
-        policy_decision = self.nbe_policy.evaluate_candidates(DisputeCategory(case.category), graph, readiness)
+        policy_decision = self._investigation_policy(DisputeCategory(case.category), graph, readiness, DataSourceType(case.data_source))
 
         # Update Timeline
         timeline = json.loads(case.timeline_json or "[]")
@@ -393,7 +408,7 @@ class DisputeService:
 
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
         new_state = InvestigationStateMachine.transition(current_state, readiness.recommended_state)
-        policy_decision = self.nbe_policy.evaluate_candidates(DisputeCategory(case.category), graph, readiness)
+        policy_decision = self._investigation_policy(DisputeCategory(case.category), graph, readiness, DataSourceType(case.data_source))
 
         timeline = json.loads(case.timeline_json or "[]")
         timeline.append({
@@ -538,7 +553,7 @@ class DisputeService:
             readiness = DecisionReadinessEvaluator.evaluate(category, graph)
             
             # Evaluate NBE policy
-            policy_decision = self.nbe_policy.evaluate_candidates(category, graph, readiness)
+            policy_decision = self._investigation_policy(category, graph, readiness, DataSourceType.SYNTHETIC_FIXTURE)
 
             # Initial state
             initial_state = InvestigationState.AWAITING_EVIDENCE if policy_decision.chosen_action else readiness.recommended_state
