@@ -345,6 +345,17 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                       </div>
                     </div>
                   ))}
+                  {missingReqs.map((requirement: string, idx: number) => (
+                    <div key={idx} className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">
+                      <Clock className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
+                      <div>
+                        <span className="font-semibold">Also still needed</span>
+                        <p className="text-[11px] text-amber-800/90 mt-0.5">
+                          {requirement.replace(/_/g, " ")}
+                        </p>
+                      </div>
+                    </div>
+                  ))}
                 </>
               ) : isItemNotReceived && !hasTracking ? (
                 <div className="p-3 rounded-xl bg-amber-50 border border-amber-200 text-amber-950 flex items-start gap-2.5">
