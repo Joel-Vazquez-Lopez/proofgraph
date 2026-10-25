@@ -97,17 +97,13 @@ def test_multipart_metadata_mismatch_rejected(client, filename, mime):
 
 
 def test_json_empty_and_partial_upload_rejected(client):
-    for payload in [
+    for overrides in [
         {"file_data_base64": ""},
         {"file_data_base64": None},
         {"file_name": None},
         {"mime_type": None},
     ]:
-        if payload["file_data_base64"] is None if "file_data_base64" in payload else False:
-            # Entirely absent file is valid for a notes-only submission; partial
-            # presence is validated separately below.
-            continue
-        response = _json_upload(client, **payload)
+        response = _json_upload(client, **overrides)
         assert response.status_code == 400
     response = client.post(
         f"/api/v1/disputes/{DISPUTE}/evidence",
