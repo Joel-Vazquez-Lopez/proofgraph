@@ -46,6 +46,10 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      - name: Run merchant investigation regression tests
+        working-directory: apps/web
+        run: npm test
+
       - name: Build Next.js application
         working-directory: apps/web
         run: npm run build
