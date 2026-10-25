@@ -182,7 +182,8 @@ class DisputeService:
         if not case:
             raise KeyError(f"Dispute {dispute_id} not found.")
 
-        current_state = InvestigationState(case.state)
+        previous_state = InvestigationState(case.state)
+        current_state = previous_state
         # Transition to INVESTIGATING if currently AWAITING_EVIDENCE
         if current_state == InvestigationState.AWAITING_EVIDENCE:
             current_state = InvestigationStateMachine.transition(current_state, InvestigationState.INVESTIGATING)
@@ -344,7 +345,7 @@ class DisputeService:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "actor": submission.submitter_role,
             "action": f"Submitted evidence ({', '.join(nodes_created)})",
-            "state_transition": f"{current_state.value} -> {new_state.value}",
+            "state_transition": f"{previous_state.value} -> {new_state.value}",
             "notes": submission.notes or "Evidence processed."
         })
 
@@ -367,7 +368,7 @@ class DisputeService:
             evidence_id=evidence_item_id,
             nodes_created=nodes_created,
             edges_created=edges_created,
-            previous_state=current_state,
+            previous_state=previous_state,
             new_state=new_state,
             readiness=readiness,
             integrity_finding=integrity_finding,
