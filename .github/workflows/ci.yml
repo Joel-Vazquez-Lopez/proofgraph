@@ -27,6 +27,10 @@ jobs:
         run: |
           pytest -v
 
+      - name: Run Independent Adaptive Policy Challenge
+        run: |
+          python benchmarks/evaluate_adaptive_nbe.py
+
       - name: Run Empirical Benchmark
         run: |
           python benchmarks/run_benchmark.py
