@@ -11,6 +11,8 @@ from packages.shared_schemas.models import (
     CandidateAction,
     PolicyDecision,
     DecisionReadinessEvaluation,
+    EvidenceVerificationStatus,
+    EvidenceOrigin,
 )
 from app.services.evidence_graph import EvidenceGraph
 
@@ -27,6 +29,26 @@ class NextBestEvidencePolicy(ABC):
 
 
 class HeuristicNBEPolicy(NextBestEvidencePolicy):
+    def __init__(self, carrier_lookup_available=True):
+        # Injected by DisputeService from the actual adapter capability.
+        # Direct policy-only tests default to an available test lookup.
+        self.carrier_lookup_available = carrier_lookup_available
+
+    @staticmethod
+    def _escalation(reason):
+        return CandidateAction(
+            action_id="act_escalate_human_review",
+            action_type=ActionType.ESCALATE_HUMAN_REVIEW,
+            title="Escalate Unresolved Dispute for Human Review",
+            description=reason,
+            target_party="SYSTEM",
+            expected_information_gain=0.0,
+            acquisition_friction=0.0,
+            utility_score=0.0,
+            rationale="ABSTAIN: " + reason,
+            required_inputs=[],
+        )
+
     """
     Deterministic, interpretable Next-Best-Evidence selection policy.
     Scores each possible acquisition action by:
@@ -67,22 +89,28 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
             or "mismatch" in edge.provenance.lower()
             or "different" in edge.provenance.lower()
         ]
+        # Readiness detects both explicit edges and derived carrier mismatches;
+        # a graph may contain inconsistent scans before an edge is materialized.
+        if readiness.active_contradictions and not critical_contradictions:
+            critical_contradictions = [(None, None, None)]
         if critical_contradictions:
             if "act_resolve_contradiction" not in attempted_actions:
                 src, tgt, edge = critical_contradictions[0]
+                source_label = src.label if src is not None else "carrier reports"
+                target_label = tgt.label if tgt is not None else "order / other reports"
                 action = CandidateAction(
                     action_id="act_resolve_contradiction",
                     action_type=ActionType.REQUEST_BUYER_CLARIFICATION,
-                    title=f"Resolve Discrepancy: {src.label} vs {tgt.label}",
+                    title=f"Resolve Discrepancy: {source_label} vs {target_label}",
                     description=(
-                        f"A factual discrepancy was identified between {src.label} and {tgt.label}. "
+                        f"A factual discrepancy was identified between {source_label} and {target_label}. "
                         "Request targeted clarification regarding destination address or receipt confirmation."
                     ),
                     target_party="BUYER",
                     expected_information_gain=0.98,
                     acquisition_friction=0.2,
                     utility_score=0.95,
-                    rationale="Factual contradiction directly blocks decision-readiness. Resolving it has primary utility.",
+                    rationale="Factual contradiction blocks handoff. " + "; ".join(readiness.active_contradictions),
                     required_inputs=["clarification_statement", "supporting_address_document"]
                 )
                 candidates.append(action)
@@ -104,9 +132,18 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
         if category == DisputeCategory.ITEM_NOT_RECEIVED:
             shipment_nodes = graph.get_nodes_by_type(NodeType.SHIPMENT)
             obs_nodes = graph.get_nodes_by_type(NodeType.OBSERVATION)
+            # An uploaded assertion labelled "carrier" is not a carrier report.
+            # Match an observation to this shipment via its explicit evidence edge.
+            linked_ids = {
+                e.source_id for e in graph.to_data().edges
+                if e.type == EdgeType.DERIVED_FROM
+                and e.target_id in {s.id for s in shipment_nodes}
+            }
             carrier_obs = [
                 o for o in obs_nodes
-                if ("carrier" in o.source.lower() or "tracking" in o.label.lower())
+                if o.id in linked_ids
+                and o.verification_status == EvidenceVerificationStatus.VERIFIED
+                and o.origin in (EvidenceOrigin.VERIFIED_EXTERNAL, EvidenceOrigin.SYNTHETIC_FIXTURE)
             ]
 
             has_tracking = len(shipment_nodes) > 0
@@ -149,7 +186,25 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
                 tracking_no = shipment.content.get("tracking_number", "UNKNOWN")
                 carrier = shipment.content.get("carrier_name", "Carrier")
                 
-                if "act_carrier_lookup" not in attempted_actions:
+                if not self.carrier_lookup_available:
+                    if "act_request_carrier_receipt" not in attempted_actions:
+                        candidates.append(CandidateAction(
+                            action_id="act_request_carrier_receipt",
+                            action_type=ActionType.REQUEST_MERCHANT_FULFILLMENT,
+                            title="Request Carrier Acceptance Records",
+                            description="External carrier lookup is not configured. Request merchant carrier acceptance documentation instead.",
+                            target_party="MERCHANT",
+                            expected_information_gain=0.0,
+                            acquisition_friction=0.7,
+                            utility_score=0.8 / 1.7,
+                            rationale="External carrier API unavailable; merchant submission remains unverified until corroborated.",
+                            required_inputs=["carrier_dropoff_receipt"],
+                        ))
+                    else:
+                        candidates.append(self._escalation(
+                            "External carrier provider unavailable and merchant receipt inquiry exhausted."
+                        ))
+                elif "act_carrier_lookup" not in attempted_actions:
                     action = CandidateAction(
                         action_id="act_carrier_lookup",
                         action_type=ActionType.CARRIER_TRACKING_LOOKUP,
@@ -220,7 +275,25 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
 
                 elif st in ("IN_TRANSIT", "DELAYED", "EXCEPTION"):
                     # Scenario B — No delivery / in transit
-                    if "act_carrier_transit_monitor" not in attempted_actions:
+                    if not self.carrier_lookup_available:
+                        if "act_request_carrier_receipt" not in attempted_actions:
+                            candidates.append(CandidateAction(
+                                action_id="act_request_carrier_receipt",
+                                action_type=ActionType.REQUEST_MERCHANT_FULFILLMENT,
+                                title="Request Merchant Status Update",
+                                description="Carrier telemetry cannot be rechecked automatically; request documented update.",
+                                target_party="MERCHANT",
+                                expected_information_gain=0.0,
+                                acquisition_friction=0.7,
+                                utility_score=0.8 / 1.7,
+                                rationale="Carrier gateway unavailable; do not promise live monitoring.",
+                                required_inputs=["carrier_status_update"],
+                            ))
+                        else:
+                            candidates.append(self._escalation(
+                                "Carrier status cannot be rechecked and merchant update request is exhausted."
+                            ))
+                    elif "act_carrier_transit_monitor" not in attempted_actions:
                         candidates.append(CandidateAction(
                             action_id="act_carrier_transit_monitor",
                             action_type=ActionType.CARRIER_STATUS_MONITOR,
@@ -278,35 +351,61 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
                         ))
 
         elif category == DisputeCategory.SIGNIFICANTLY_NOT_AS_DESCRIBED:
-            # Need photo or condition evidence from buyer
-            action = CandidateAction(
-                action_id="act_buyer_condition_photo",
-                action_type=ActionType.REQUEST_IMAGE_VERIFICATION,
-                title="Request Item Condition Photograph",
-                description="Request clear photo of received item, serial/barcode, and shipping packaging.",
-                target_party="BUYER",
-                expected_information_gain=0.85,
-                acquisition_friction=0.8,
-                utility_score=0.85 / (1.0 + 0.8),  # ~0.47
-                rationale="Essential to verify buyer's claim regarding condition discrepancy.",
-                required_inputs=["condition_photo", "unboxing_notes"]
-            )
-            candidates.append(action)
+            needs_photo = any("photograph" in m.lower() or "unboxing" in m.lower()
+                              for m in readiness.missing_requirements)
+            needs_listing = any("listing" in m.lower() or "description" in m.lower()
+                                for m in readiness.missing_requirements)
+            if needs_photo and "act_buyer_condition_photo" not in attempted_actions:
+                candidates.append(CandidateAction(
+                    action_id="act_buyer_condition_photo",
+                    action_type=ActionType.REQUEST_IMAGE_VERIFICATION,
+                    title="Request Buyer Condition Photograph",
+                    description="Ask buyer for a condition/unboxing photograph, not a verified authenticity finding.",
+                    target_party="BUYER",
+                    expected_information_gain=0.0, acquisition_friction=0.8,
+                    utility_score=2.0 / 1.8,
+                    rationale="Missing buyer condition evidence. Uploaded images are submitted, not independently verified.",
+                    required_inputs=["condition_photo"],
+                ))
+            if needs_listing and "act_merchant_listing" not in attempted_actions:
+                candidates.append(CandidateAction(
+                    action_id="act_merchant_listing",
+                    action_type=ActionType.REQUEST_MERCHANT_FULFILLMENT,
+                    title="Request Original Merchant Listing",
+                    description="Request the original item listing or description as a file for comparison.",
+                    target_party="MERCHANT",
+                    expected_information_gain=0.0, acquisition_friction=0.5,
+                    utility_score=1.0 / 1.5,
+                    rationale="A condition image cannot be evaluated without the listing as another evidence source.",
+                    required_inputs=["merchant_listing"],
+                ))
+            if not candidates and readiness.missing_requirements:
+                candidates.append(self._escalation(
+                    "SNAD comparison evidence remains insufficient after available requests."
+                ))
 
         elif category == DisputeCategory.DUPLICATE_TRANSACTION:
-            action = CandidateAction(
-                action_id="act_cross_ref_tx",
-                action_type=ActionType.CROSS_REFERENCE_TRANSACTION,
-                title="Correlate Secondary Settlement Log",
-                description="Query PayPal account transactions within 15 minutes of primary timestamp.",
-                target_party="SYSTEM",
-                expected_information_gain=0.95,
-                acquisition_friction=0.05,
-                utility_score=0.95 / (1.0 + 0.05),
-                rationale="Instant automated verification of duplicate charge idempotency key.",
-                required_inputs=[]
-            )
-            candidates.append(action)
+            requirements = " ".join(readiness.missing_requirements).lower()
+            action_id = ("act_request_transaction_records" if "two distinct" in requirements
+                         else "act_request_transaction_reconciliation")
+            if readiness.missing_requirements and action_id not in attempted_actions:
+                candidates.append(CandidateAction(
+                    action_id=action_id,
+                    action_type=ActionType.REQUEST_MERCHANT_FULFILLMENT,
+                    title=("Request Both Payment Records" if "records" in action_id
+                           else "Request Order-Level Charge Reconciliation"),
+                    description="Request traceable transaction IDs, amounts, currency and common order reference. Uploads do not establish external verification.",
+                    target_party="MERCHANT",
+                    expected_information_gain=0.0,
+                    acquisition_friction=0.7,
+                    utility_score=1.0 / 1.7,
+                    rationale="Missing source-corroborated transaction information: " + "; ".join(readiness.missing_requirements),
+                    required_inputs=["transaction_records", "order_id"],
+                ))
+            elif readiness.missing_requirements:
+                candidates.append(self._escalation(
+                    "Payment duplication cannot be corroborated by the available records."
+                ))
 
         # Sort candidates by utility_score descending
         candidates.sort(key=lambda c: c.utility_score, reverse=True)

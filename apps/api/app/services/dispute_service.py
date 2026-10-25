@@ -69,7 +69,9 @@ class DisputeService:
                 "act_carrier_lookup": data_source == DataSourceType.SYNTHETIC_FIXTURE,
             })
             return policy.evaluate_candidates(category, graph, readiness)
-        return self.nbe_policy.evaluate_candidates(category, graph, readiness)
+        return HeuristicNBEPolicy(
+            carrier_lookup_available=data_source == DataSourceType.SYNTHETIC_FIXTURE
+        ).evaluate_candidates(category, graph, readiness)
 
     @staticmethod
     def _record_discriminative_question(graph: EvidenceGraph, decision: PolicyDecision) -> None:
@@ -224,6 +226,19 @@ class DisputeService:
                     "mime_type": mime,
                     "sha256": integrity_finding.sha256_hash,
                     "status": integrity_finding.integrity_status.value,
+                    "action_id": submission.action_id,
+                    # A submitted listing is evidence for comparison, NOT proof
+                    # the listed claims or the uploaded document are authentic.
+                    "kind": (
+                        "merchant_listing"
+                        if submission.action_id == "act_merchant_listing"
+                        and submission.submitter_role.upper() == "MERCHANT"
+                        else "condition_photo"
+                        if submission.action_id == "act_buyer_condition_photo"
+                        and submission.submitter_role.upper() == "BUYER"
+                        and mime.startswith("image/")
+                        else "submitted_file"
+                    ),
                 },
                 source=f"{submission.submitter_role}_UPLOAD",
                 node_id=evidence_item_id,
@@ -274,8 +289,8 @@ class DisputeService:
             else:
                 ship_node = existing_ship
 
-            # Recording merchant tracking satisfies the tracking-number request,
-            # not an outstanding independent carrier-telemetry lookup.
+            # A submitted tracking identifier satisfies only the merchant tracking
+            # request. It cannot answer an outstanding carrier lookup question.
             for q in graph.get_open_questions():
                 action = q.content.get("action") or {}
                 requested_action = action.get("action_id", "") if isinstance(action, dict) else ""
@@ -303,31 +318,29 @@ class DisputeService:
                 edges_created.extend(carrier_edges)
                 carrier_outcome_note = self._carrier_outcome_message(carrier_result)
 
-        # A document may address the *specific* requested upload action,
-        # but neither a generic upload nor a tracking value answers every
-        # unrelated question. Linking a submitted document is NOT verifying it.
+        # A document cannot answer every open question merely because it was
+        # uploaded. Only link the specifically requested action, and do not
+        # confuse an ANSWERS edge with independent verification.
         if integrity_finding and submission.action_id:
-            for q in graph.get_open_questions():
-                action = q.content.get("action") or {}
-                requested_action = action.get("action_id") if isinstance(action, dict) else None
-                if (
-                    requested_action == submission.action_id
-                    and requested_action in (
-                        "act_request_carrier_receipt",
-                        "act_request_signature_or_proof",
-                        "act_buyer_condition_photo",
-                    )
-                ):
-                    edge_ans = graph.add_edge(
-                        source_id=ev_node.id,
-                        target_id=q.id,
-                        edge_type=EdgeType.ANSWERS,
-                        provenance=(
-                            "Submitted document for the requested evidence action; "
-                            "authenticity and factual claims remain UNVERIFIED."
-                        ),
-                    )
-                    edges_created.append(edge_ans.id)
+            eligible = {
+                "act_buyer_condition_photo": "condition_photo",
+                "act_merchant_listing": "merchant_listing",
+                "act_request_transaction_records": "submitted_file",
+                "act_request_transaction_reconciliation": "submitted_file",
+                "act_request_carrier_receipt": "submitted_file",
+                "act_request_signature_or_proof": "submitted_file",
+            }
+            item = ev_node
+            if (item and item.type == NodeType.EVIDENCE_ITEM
+                    and item.content.get("kind") == eligible.get(submission.action_id)):
+                for q in graph.get_open_questions():
+                    action = q.content.get("action", {})
+                    if isinstance(action, dict) and action.get("action_id") == submission.action_id:
+                        edge = graph.add_edge(
+                            item.id, q.id, EdgeType.ANSWERS,
+                            "Submitted file responds to requested action; content remains unverified."
+                        )
+                        edges_created.append(edge.id)
 
         # Run Decision-Readiness Evaluator
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
