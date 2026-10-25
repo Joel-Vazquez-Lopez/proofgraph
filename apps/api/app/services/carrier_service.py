@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, Literal
 from pydantic import BaseModel, Field
 
 from packages.shared_schemas.models import (
@@ -21,6 +21,10 @@ class CarrierVerificationResult(BaseModel):
     is_synthetic: bool
     verification_source: str
     audit_note: str
+    # A lookup may yield a useful fixture outcome without independently checking
+    # a real carrier. Never infer external verification from delivery status alone.
+    verification_outcome: Literal["SIMULATED", "UNAVAILABLE", "EXTERNALLY_VERIFIED"]
+    independently_verified: bool = False
 
 
 class SyntheticCarrierAdapter:
@@ -96,7 +100,8 @@ class SyntheticCarrierAdapter:
                 origin=EvidenceOrigin.SYNTHETIC_FIXTURE,
                 is_synthetic=True,
                 verification_source="SyntheticCarrierAdapter (Simulated Fixture)",
-                audit_note=f"Simulated fixture lookup returned status: {rec['status']} ({rec.get('notes', '')})",
+                audit_note=f"Simulated fixture lookup returned status: {rec['status']} ({rec.get('notes', '')}). No external carrier contacted.",
+                verification_outcome="SIMULATED",
             )
         else:
             # If tracking number is unknown to synthetic database
@@ -111,17 +116,17 @@ class SyntheticCarrierAdapter:
                 has_delivery_photo=False,
                 origin=EvidenceOrigin.SYNTHETIC_FIXTURE,
                 is_synthetic=True,
-                verification_source="SyntheticCarrierAdapter",
-                audit_note="Carrier telemetry query: tracking number not found in carrier database.",
+                verification_source="SyntheticCarrierAdapter (Simulated Fixture)",
+                audit_note="Tracking number not found in the local synthetic fixture dataset; no external carrier queried.",
+                verification_outcome="SIMULATED",
             )
 
 
 class CarrierVerificationService:
     """
-    Independent carrier verification boundary.
-    Enforces that synthetic evidence CANNOT enter real PayPal cases,
-    and unverified user-submitted tracking numbers remain UNVERIFIED
-    unless an independent verification event takes place.
+    Carrier lookup boundary. No independent external carrier provider is
+    implemented. Synthetic fixture outcomes are demo-only; all other case
+    sources return UNKNOWN/UNAVAILABLE without attempting an API request.
     """
 
     @classmethod
@@ -131,10 +136,9 @@ class CarrierVerificationService:
         tracking_number: str,
         case_data_source: DataSourceType
     ) -> CarrierVerificationResult:
-        # CRITICAL SAFETY GATE: Real cases must never query or ingest synthetic carrier data!
-        if case_data_source == DataSourceType.PAYPAL_SANDBOX:
-            # In sandbox/production, real carrier API is queried if configured
-            # Otherwise, explicitly preserve uncertainty.
+        # Only an explicitly synthetic case can query demo fixture records.
+        # There is no configured external carrier adapter in this application.
+        if case_data_source != DataSourceType.SYNTHETIC_FIXTURE:
             return CarrierVerificationResult(
                 carrier_name=carrier_name,
                 tracking_number=tracking_number,
@@ -146,12 +150,12 @@ class CarrierVerificationService:
                 has_delivery_photo=False,
                 origin=EvidenceOrigin.UNVERIFIED,
                 is_synthetic=False,
-                verification_source="PayPalSandboxCarrierGateway (Live)",
+                verification_source="CarrierGateway (UNCONFIGURED; no live request)",
                 audit_note=(
-                    "External carrier telemetry query unconfigured or pending carrier sync. "
+                    "External carrier telemetry query unconfigured; no carrier API was contacted. "
                     "Tracking status remains UNVERIFIED. Cannot assume delivery."
                 ),
+                verification_outcome="UNAVAILABLE",
             )
-        else:
-            # Synthetic dispute case: query explicit synthetic carrier adapter
-            return SyntheticCarrierAdapter.lookup(carrier_name, tracking_number)
+        # Demo scenario: only consult a clearly labeled local fixture.
+        return SyntheticCarrierAdapter.lookup(carrier_name, tracking_number)
