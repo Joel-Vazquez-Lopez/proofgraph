@@ -227,7 +227,8 @@ export default function ProofGraphPage() {
         submitter_role: "MERCHANT",
         carrier_name: carrierName,
         tracking_number: trackingNumber,
-        verify_carrier_now: true,
+        // Tracking receipt and carrier lookup are separate, auditable merchant steps.
+        verify_carrier_now: false,
         notes,
       };
       const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}/evidence`, {
