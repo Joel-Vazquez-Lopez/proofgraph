@@ -1,290 +1,215 @@
-from typing import List
+"""Conservative evidence-package readiness: never an adjudication outcome.
+
+A fixture can establish the state of a *simulated case*, not external truth.
+Submitted records can populate a review package but their content is not verified
+simply because a file was accepted. Conflicts block an unjustified handoff.
+"""
 from packages.shared_schemas.models import (
-    DisputeCategory,
-    InvestigationState,
-    NodeType,
-    EdgeType,
-    EvidenceVerificationStatus,
-    DecisionReadinessEvaluation,
+    DisputeCategory, InvestigationState, NodeType, EdgeType,
+    EvidenceOrigin, EvidenceVerificationStatus, DecisionReadinessEvaluation,
 )
 from app.services.evidence_graph import EvidenceGraph
+from app.services.hypothesis_engine import assess_inr_hypotheses
+
+
+def _corroborated(node):
+    return (
+        node.verification_status == EvidenceVerificationStatus.VERIFIED
+        and node.origin in (EvidenceOrigin.VERIFIED_EXTERNAL, EvidenceOrigin.SYNTHETIC_FIXTURE)
+        and node.metadata.get("verification_scope") != "EXTERNAL_UNAVAILABLE"
+    )
+
+
+def _contradictions(graph):
+    return [
+        f"{src.id} conflicts with {tgt.id}: {edge.provenance}"
+        for src, tgt, edge in graph.get_contradictions()
+    ]
+
+
+def _result(category, satisfied, missing, conflicts, explanation="", escalation=False):
+    # A contradiction is never silently made "decision ready" by document count.
+    review = bool(conflicts) or escalation
+    state = (InvestigationState.REVIEW_REQUIRED if review else
+             InvestigationState.INVESTIGATING if missing else InvestigationState.DECISION_READY)
+    ready = not review and not missing
+    return DecisionReadinessEvaluation(
+        is_decision_ready=ready,
+        requires_escalation=review,
+        category=category,
+        satisfied_requirements=satisfied,
+        missing_requirements=missing,
+        active_contradictions=conflicts,
+        recommended_state=state,
+        rationale=(
+            ("Human review required: " if review else
+             "Incomplete evidence package: " if missing else
+             "Evidence package available for human adjudication review; no outcome decided. ")
+            + explanation
+            + (" Unresolved: " + "; ".join(missing) if missing else "")
+            + (" Contradictions: " + "; ".join(conflicts) if conflicts else "")
+        ),
+    )
 
 
 class DecisionReadinessEvaluator:
-    """
-    Deterministic evaluation of dispute-readiness standards.
-    Decision-ready means the case package satisfies documented handoff criteria
-    for human or PayPal adjudicator review. It does not dictate who wins.
-    """
-
     @classmethod
     def evaluate(cls, category: DisputeCategory, graph: EvidenceGraph) -> DecisionReadinessEvaluation:
         if category == DisputeCategory.ITEM_NOT_RECEIVED:
-            return cls._evaluate_item_not_received(graph)
-        elif category == DisputeCategory.SIGNIFICANTLY_NOT_AS_DESCRIBED:
-            return cls._evaluate_snad(graph)
-        elif category == DisputeCategory.DUPLICATE_TRANSACTION:
-            return cls._evaluate_duplicate_transaction(graph)
-        elif category == DisputeCategory.INCORRECT_AMOUNT:
-            return cls._evaluate_incorrect_amount(graph)
+            return cls._inr(graph)
+        if category == DisputeCategory.SIGNIFICANTLY_NOT_AS_DESCRIBED:
+            return cls._snad(graph)
+        if category == DisputeCategory.DUPLICATE_TRANSACTION:
+            return cls._duplicate(graph)
+        if category == DisputeCategory.INCORRECT_AMOUNT:
+            return cls._incorrect_amount(graph)
+        return cls._generic(category, graph)
+
+    @staticmethod
+    def _inr(graph):
+        category = DisputeCategory.ITEM_NOT_RECEIVED
+        satisfied, missing, conflicts = [], [], _contradictions(graph)
+        txs = [n for n in graph.get_nodes_by_type(NodeType.TRANSACTION) if _corroborated(n)]
+        if txs:
+            satisfied.append("Corroborated transaction record (external or explicitly simulated case).")
         else:
-            return cls._evaluate_generic(category, graph)
-
-    @classmethod
-    def _evaluate_item_not_received(cls, graph: EvidenceGraph) -> DecisionReadinessEvaluation:
-        satisfied: List[str] = []
-        missing: List[str] = []
-        contradictions_desc: List[str] = []
-
-        # 1. Transaction verification
-        tx_nodes = [n for n in graph.get_nodes_by_type(NodeType.TRANSACTION) if n.verification_status == EvidenceVerificationStatus.VERIFIED]
-        if tx_nodes:
-            satisfied.append("Verified transaction record present.")
+            missing.append("PayPal transaction record with confirmed source authority.")
+        orders = graph.get_nodes_by_type(NodeType.ORDER)
+        shipments = graph.get_nodes_by_type(NodeType.SHIPMENT)
+        if len(orders) == 1 and isinstance(orders[0].content.get("destination_address"), dict) and orders[0].content["destination_address"].get("postal_code"):
+            satisfied.append("Order postal code recorded (may be merchant-submitted).")
         else:
-            missing.append("Verified transaction record from PayPal.")
-
-        # 2. Merchant order & shipping address record
-        order_nodes = graph.get_nodes_by_type(NodeType.ORDER)
-        if order_nodes:
-            satisfied.append("Merchant order record with destination address identified.")
+            missing.append("Unique merchant order with destination postal code.")
+        if len(shipments) == 1 and shipments[0].content.get("tracking_number"):
+            satisfied.append("Shipment tracking identifier recorded; presence alone does not verify delivery.")
         else:
-            missing.append("Merchant order details with confirmed shipping address.")
+            missing.append("Unique shipment tracking identifier for this order.")
 
-        # 3. Shipment carrier & tracking details
-        shipment_nodes = graph.get_nodes_by_type(NodeType.SHIPMENT)
-        if shipment_nodes:
-            satisfied.append("Carrier tracking identifier recorded.")
-        else:
-            missing.append("Carrier shipping identifier / tracking number.")
-
-        # 4. Carrier delivery observation
-        obs_nodes = graph.get_nodes_by_type(NodeType.OBSERVATION)
-        delivery_obs = [
-            obs for obs in obs_nodes
-            if ("carrier" in obs.source.lower() or "tracking" in obs.label.lower())
-        ]
-        
-        delivered_obs = None
-        in_transit_obs = None
-        unknown_carrier_obs = None
-
-        for obs in delivery_obs:
-            st = str(obs.content.get("status", "")).upper()
-            if st == "DELIVERED":
-                delivered_obs = obs
-            elif st in ("IN_TRANSIT", "DELAYED", "EXCEPTION"):
-                in_transit_obs = obs
-            elif st in ("UNKNOWN", "NOT_FOUND"):
-                unknown_carrier_obs = obs
-
-        if delivered_obs and delivered_obs.verification_status == EvidenceVerificationStatus.VERIFIED:
-            satisfied.append(f"Carrier verified delivery ({delivered_obs.label}).")
-            has_signature = delivered_obs.content.get("has_signature", False)
-
-            # Check for active buyer non-receipt claims
-            buyer_claims = [
-                n for n in graph.get_nodes_by_type(NodeType.CLAIM)
-                if n.content.get("party") == "BUYER"
-            ]
-            buyer_disputes_receipt = bool(buyer_claims)
-
-            # Check if signature / delivery proof evidence was submitted
-            has_proof_of_delivery = any(
-                n for n in graph.get_nodes_by_type(NodeType.EVIDENCE_ITEM)
-                if ("signature" in n.label.lower() or "proof" in n.label.lower() or "gps" in str(n.content).lower())
-                and n.verification_status == EvidenceVerificationStatus.VERIFIED
+        review = assess_inr_hypotheses(graph)
+        statuses = {a.hypothesis_id: a.status for a in review.assessments}
+        supported_match = statuses.get("carrier_delivered_to_order_postal_code") == "SUPPORTED"
+        supported_wrong = statuses.get("carrier_delivered_to_other_postal_code") == "SUPPORTED"
+        supported_transit = statuses.get("carrier_reports_in_transit_or_exception") == "SUPPORTED"
+        if len(orders) == 1 and len(shipments) == 1:
+            if supported_wrong or any(a.status == "CONFLICTED" for a in review.assessments) or (supported_match and supported_transit):
+                evidence_ids = sorted({
+                    item for assessment in review.assessments
+                    for item in (*assessment.supporting_evidence_ids, *assessment.contradicting_evidence_ids)
+                })
+                conflicts.append("Carrier reports disagree with the order or with each other; evidence IDs: " + ", ".join(evidence_ids))
+        if supported_match and not conflicts:
+            satisfied.append(
+                "Simulated carrier delivery-to-ZIP report (NOT independent verification)."
+                if review.evidence_basis == "SIMULATED" else
+                "Independently corroborated carrier delivery-to-ZIP report (NOT physical receipt)."
             )
-
-            if not has_signature and buyer_disputes_receipt and not has_proof_of_delivery:
-                # Scenario A: Delivery scan without signature, but buyer actively disputes receipt.
-                # Do NOT dismiss the buyer's claim. Record unresolved delivery question.
-                missing.append(
-                    "Buyer reports non-receipt despite carrier delivery scan. "
-                    "Unresolved: carrier signature record, GPS delivery coordinates, "
-                    "or drop-photo confirmation required."
-                )
-            elif has_proof_of_delivery:
-                satisfied.append("Carrier signature/drop photo verification provided resolving buyer non-receipt inquiry.")
-            elif not has_signature:
+            buyer_disputes = any(n.content.get("party") == "BUYER" for n in graph.get_nodes_by_type(NodeType.CLAIM))
+            linked = {
+                (e.source_id, e.target_id) for e in graph.to_data().edges
+                if e.type == EdgeType.RELATES_TO
+            }
+            proofs = [
+                n for n in graph.get_nodes_by_type(NodeType.EVIDENCE_ITEM)
+                if _corroborated(n)
+                and n.content.get("kind") in ("signature_record", "delivery_photo", "recipient_acknowledgement")
+                and (n.id, shipments[0].id) in linked
+            ]
+            if buyer_disputes and not proofs:
+                missing.append("Buyer reports non-receipt: obtain linked carrier signature/photo or handoff documentation; ZIP scan cannot establish possession.")
+            if proofs:
                 satisfied.append(
-                    "Delivery completed without recipient signature (front-door drop); "
-                    "no active buyer non-receipt claim."
+                    "Linked simulated handoff fixture available for human review (NOT external verification)."
+                    if all(n.origin == EvidenceOrigin.SYNTHETIC_FIXTURE for n in proofs) else
+                    "Linked external handoff documentation available for human review; receipt still subject to adjudication."
                 )
-        elif in_transit_obs:
-            missing.append(f"Proof of completed delivery (shipment is currently in-transit/exception: {in_transit_obs.content.get('status', 'IN_TRANSIT')}).")
-        elif unknown_carrier_obs:
-            missing.append("Independent carrier delivery verification (carrier lookup returned unverified/not found).")
-        else:
-            missing.append("Verified carrier tracking telemetry or proof of delivery.")
+        elif supported_transit and not conflicts:
+            missing.append("Proof of completed delivery (shipment in-transit/exception).")
+        elif not conflicts:
+            missing.append("Eligible, shipment-linked carrier delivery report with matching postal code.")
 
-        # 5. Check active critical contradictions in graph (e.g. address or order discrepancies)
-        contradictions = graph.get_contradictions()
-        critical_contradictions = [
-            (src, tgt, edge) for src, tgt, edge in contradictions
-            if tgt.type in (NodeType.ORDER, NodeType.TRANSACTION, NodeType.SHIPMENT)
-            or "mismatch" in edge.provenance.lower()
-            or "different" in edge.provenance.lower()
-        ]
-        for src, tgt, edge in critical_contradictions:
-            contradictions_desc.append(f"Critical discrepancy between {src.label} and {tgt.label}: {edge.provenance}")
-
-        # Check if investigation has been explicitly escalated due to exhaustion
-        escalation_flag = any(
+        escalation = any(
             "escalate" in q.id.lower() or "insufficient" in q.label.lower()
             for q in graph.get_nodes_by_type(NodeType.QUESTION)
         )
+        return _result(category, satisfied, missing, list(dict.fromkeys(conflicts)),
+                       "Carrier observation is not proof the buyer took possession.", escalation)
 
-        # Determine decision readiness & recommended state
-        requires_escalation = False
-        if critical_contradictions:
-            # Critical discrepancy (e.g. delivery address mismatch)
-            requires_escalation = True
-            recommended_state = InvestigationState.REVIEW_REQUIRED
-            rationale = (
-                f"Investigation complete but requires human review due to {len(critical_contradictions)} "
-                f"unresolved factual contradictions (e.g. delivery address mismatch)."
-            )
-            is_ready = False
-        elif escalation_flag:
-            requires_escalation = True
-            recommended_state = InvestigationState.REVIEW_REQUIRED
-            rationale = (
-                f"Investigation halted and escalated to human review due to insufficient verifiable evidence. "
-                f"Unresolved requirements: {', '.join(missing)}."
-            )
-            is_ready = False
-        elif not missing:
-            recommended_state = InvestigationState.DECISION_READY
-            is_ready = True
-            rationale = (
-                "All mandatory evidence requirements for Item Not Received are verified. "
-                "The case package is decision-ready for human or PayPal adjudication."
-            )
+    @staticmethod
+    def _snad(graph):
+        category = DisputeCategory.SIGNIFICANTLY_NOT_AS_DESCRIBED
+        satisfied, missing, conflicts = [], [], _contradictions(graph)
+        orders = graph.get_nodes_by_type(NodeType.ORDER)
+        if len(orders) == 1 and orders[0].content.get("item_name"):
+            satisfied.append("Merchant order/item specification recorded; not independently authenticated.")
         else:
-            recommended_state = InvestigationState.INVESTIGATING
-            is_ready = False
-            rationale = f"Missing {len(missing)} required evidence components: {', '.join(missing)}."
+            missing.append("Order item specification.")
 
-        return DecisionReadinessEvaluation(
-            is_decision_ready=is_ready,
-            requires_escalation=requires_escalation,
-            category=DisputeCategory.ITEM_NOT_RECEIVED,
-            satisfied_requirements=satisfied,
-            missing_requirements=missing,
-            active_contradictions=contradictions_desc,
-            recommended_state=recommended_state,
-            rationale=rationale,
-        )
+        items = graph.get_nodes_by_type(NodeType.EVIDENCE_ITEM)
+        photos = [
+            n for n in items
+            if str(n.content.get("mime_type", "")).lower().startswith("image/")
+            and n.origin in (EvidenceOrigin.USER_SUBMITTED, EvidenceOrigin.SYNTHETIC_FIXTURE, EvidenceOrigin.VERIFIED_EXTERNAL)
+            and n.verification_status != EvidenceVerificationStatus.REJECTED
+        ]
+        if photos:
+            satisfied.append("Condition photograph submitted (authenticity and content not independently verified).")
+        else:
+            missing.append("Buyer condition photograph/unboxing image.")
 
-    @classmethod
-    def _evaluate_snad(cls, graph: EvidenceGraph) -> DecisionReadinessEvaluation:
-        satisfied = []
-        missing = []
-        contradictions_desc = []
+        listings = [
+            n for n in items if n.content.get("kind") == "merchant_listing"
+            and n.origin in (EvidenceOrigin.USER_SUBMITTED, EvidenceOrigin.SYNTHETIC_FIXTURE, EvidenceOrigin.VERIFIED_EXTERNAL)
+            and n.verification_status != EvidenceVerificationStatus.REJECTED
+        ]
+        if listings:
+            satisfied.append("Original merchant listing supplied for comparison (not proof of its accuracy).")
+        else:
+            missing.append("Original merchant listing/description for comparison.")
+        return _result(category, satisfied, missing, conflicts,
+                       "A photo plus listing enables review, not a finding of misrepresentation.")
 
-        # Required: Order details, Buyer condition proof, Merchant description/listing
+    @staticmethod
+    def _duplicate(graph):
+        category = DisputeCategory.DUPLICATE_TRANSACTION
+        satisfied, missing, conflicts = [], [], _contradictions(graph)
+        transactions = [n for n in graph.get_nodes_by_type(NodeType.TRANSACTION) if _corroborated(n)]
+        by_id = {str(n.content.get("transaction_id", "")).strip(): n for n in transactions if n.content.get("transaction_id")}
+        if len(by_id) < 2:
+            missing.append("Two distinct, source-corroborated payment transaction IDs (not uploaded assertions).")
+        else:
+            pairs = list(by_id.values())
+            # A matched order reference is required before two legitimate payments
+            # can be treated as a useful duplicate-charge review package.
+            order_ids = {str(n.content.get("order_id", "")).strip() for n in pairs}
+            amounts = {(n.content.get("amount"), n.content.get("currency")) for n in pairs}
+            if "" in order_ids or len(order_ids) != 1:
+                missing.append("Both transactions reconciled to the same original order reference.")
+            else:
+                satisfied.append("Distinct corroborated transactions reference the same order.")
+            if len(amounts) != 1 or any(amt is None or not currency for amt, currency in amounts):
+                missing.append("Consistent transaction amount and currency for duplicate-charge comparison.")
+            else:
+                satisfied.append("Both transaction amounts and currencies recorded as equal (not proof of erroneous duplication).")
+        return _result(category, satisfied, missing, conflicts,
+                       "A pair of charges can still represent legitimate separate transactions.")
+
+    @staticmethod
+    def _incorrect_amount(graph):
+        category = DisputeCategory.INCORRECT_AMOUNT
+        satisfied, missing, conflicts = [], [], _contradictions(graph)
+        if any(_corroborated(n) for n in graph.get_nodes_by_type(NodeType.TRANSACTION)):
+            satisfied.append("Source-corroborated settlement record present.")
+        else:
+            missing.append("Source-corroborated transaction settlement record.")
         if graph.get_nodes_by_type(NodeType.ORDER):
-            satisfied.append("Order invoice with item specification present.")
+            satisfied.append("Merchant order amount recorded (possibly submitted).")
         else:
-            missing.append("Order specification.")
+            missing.append("Original merchant order/cart amount.")
+        return _result(category, satisfied, missing, conflicts,
+                       "Amount comparison requires human interpretation.")
 
-        evidence_items = graph.get_nodes_by_type(NodeType.EVIDENCE_ITEM)
-        photo_evidence = [e for e in evidence_items if "image" in str(e.content.get("mime_type", "")) or "photo" in e.label.lower()]
-        if photo_evidence:
-            satisfied.append("Condition photo or unboxing evidence submitted.")
-        else:
-            missing.append("Photographic evidence of item condition from buyer.")
-
-        contradictions = graph.get_contradictions()
-        for src, tgt, edge in contradictions:
-            contradictions_desc.append(f"Contradiction: {src.label} vs {tgt.label}")
-
-        is_ready = len(missing) == 0 and len(contradictions_desc) == 0
-        state = InvestigationState.DECISION_READY if is_ready else (
-            InvestigationState.REVIEW_REQUIRED if contradictions_desc else InvestigationState.INVESTIGATING
-        )
-
-        return DecisionReadinessEvaluation(
-            is_decision_ready=is_ready,
-            requires_escalation=bool(contradictions_desc),
-            category=DisputeCategory.SIGNIFICANTLY_NOT_AS_DESCRIBED,
-            satisfied_requirements=satisfied,
-            missing_requirements=missing,
-            active_contradictions=contradictions_desc,
-            recommended_state=state,
-            rationale="SNAD evaluation completed." if is_ready else f"Missing: {', '.join(missing)}"
-        )
-
-    @classmethod
-    def _evaluate_duplicate_transaction(cls, graph: EvidenceGraph) -> DecisionReadinessEvaluation:
-        tx_nodes = graph.get_nodes_by_type(NodeType.TRANSACTION)
-        satisfied = []
-        missing = []
-
-        if len(tx_nodes) >= 2:
-            satisfied.append("Dual transaction logs captured for cross-reference.")
-            is_ready = True
-            state = InvestigationState.DECISION_READY
-            rationale = "Duplicate charge telemetry ready for human sign-off."
-        else:
-            missing.append("Secondary transaction reference.")
-            is_ready = False
-            state = InvestigationState.INVESTIGATING
-            rationale = "Awaiting secondary transaction verification."
-
-        return DecisionReadinessEvaluation(
-            is_decision_ready=is_ready,
-            requires_escalation=False,
-            category=DisputeCategory.DUPLICATE_TRANSACTION,
-            satisfied_requirements=satisfied,
-            missing_requirements=missing,
-            active_contradictions=[],
-            recommended_state=state,
-            rationale=rationale
-        )
-
-    @classmethod
-    def _evaluate_incorrect_amount(cls, graph: EvidenceGraph) -> DecisionReadinessEvaluation:
-        tx_nodes = graph.get_nodes_by_type(NodeType.TRANSACTION)
-        order_nodes = graph.get_nodes_by_type(NodeType.ORDER)
-        satisfied = []
-        missing = []
-
-        if tx_nodes and order_nodes:
-            satisfied.append("Transaction charged amount and order invoice subtotal recorded.")
-            is_ready = True
-            state = InvestigationState.DECISION_READY
-            rationale = "Amount discrepancy reconciliation ready."
-        else:
-            if not tx_nodes:
-                missing.append("Transaction settlement record.")
-            if not order_nodes:
-                missing.append("Original merchant invoice/cart amount.")
-            is_ready = False
-            state = InvestigationState.INVESTIGATING
-            rationale = f"Awaiting records: {', '.join(missing)}"
-
-        return DecisionReadinessEvaluation(
-            is_decision_ready=is_ready,
-            requires_escalation=False,
-            category=DisputeCategory.INCORRECT_AMOUNT,
-            satisfied_requirements=satisfied,
-            missing_requirements=missing,
-            active_contradictions=[],
-            recommended_state=state,
-            rationale=rationale
-        )
-
-    @classmethod
-    def _evaluate_generic(cls, category: DisputeCategory, graph: EvidenceGraph) -> DecisionReadinessEvaluation:
-        tx_nodes = graph.get_nodes_by_type(NodeType.TRANSACTION)
-        return DecisionReadinessEvaluation(
-            is_decision_ready=bool(tx_nodes),
-            requires_escalation=False,
-            category=category,
-            satisfied_requirements=["Transaction record ingested"] if tx_nodes else [],
-            missing_requirements=[] if tx_nodes else ["Transaction record"],
-            active_contradictions=[],
-            recommended_state=InvestigationState.DECISION_READY if tx_nodes else InvestigationState.INVESTIGATING,
-            rationale="Generic dispute evaluation standard applied."
-        )
+    @staticmethod
+    def _generic(category, graph):
+        missing = ["Category-specific evidence standard not implemented; human review required."]
+        return _result(category, [], missing, _contradictions(graph),
+                       "No automatic determination is supported.", escalation=True)
