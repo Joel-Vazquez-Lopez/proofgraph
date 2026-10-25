@@ -284,8 +284,8 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
                   <div className="flex items-center justify-between">
                     <span className="text-slate-600">Information gain:</span>
                     <span className="font-mono font-bold text-indigo-700">
-                      {policy?.chosen_action?.expected_information_gain > 0
-                        ? policy.chosen_action.expected_information_gain.toFixed(2)
+                      {(policy?.chosen_action?.expected_information_gain ?? 0) > 0
+                        ? (policy?.chosen_action?.expected_information_gain ?? 0).toFixed(2)
                         : "Not estimated"}
                     </span>
                   </div>
