@@ -69,7 +69,9 @@ class DisputeService:
                 "act_carrier_lookup": data_source == DataSourceType.SYNTHETIC_FIXTURE,
             })
             return policy.evaluate_candidates(category, graph, readiness)
-        return self.nbe_policy.evaluate_candidates(category, graph, readiness)
+        return HeuristicNBEPolicy(
+            carrier_lookup_available=data_source == DataSourceType.SYNTHETIC_FIXTURE
+        ).evaluate_candidates(category, graph, readiness)
 
     @staticmethod
     def _record_discriminative_question(graph: EvidenceGraph, decision: PolicyDecision) -> None:
@@ -182,7 +184,8 @@ class DisputeService:
         if not case:
             raise KeyError(f"Dispute {dispute_id} not found.")
 
-        current_state = InvestigationState(case.state)
+        previous_state = InvestigationState(case.state)
+        current_state = previous_state
         # Transition to INVESTIGATING if currently AWAITING_EVIDENCE
         if current_state == InvestigationState.AWAITING_EVIDENCE:
             current_state = InvestigationStateMachine.transition(current_state, InvestigationState.INVESTIGATING)
@@ -223,6 +226,19 @@ class DisputeService:
                     "mime_type": mime,
                     "sha256": integrity_finding.sha256_hash,
                     "status": integrity_finding.integrity_status.value,
+                    "action_id": submission.action_id,
+                    # A submitted listing is evidence for comparison, NOT proof
+                    # the listed claims or the uploaded document are authentic.
+                    "kind": (
+                        "merchant_listing"
+                        if submission.action_id == "act_merchant_listing"
+                        and submission.submitter_role.upper() == "MERCHANT"
+                        else "condition_photo"
+                        if submission.action_id == "act_buyer_condition_photo"
+                        and submission.submitter_role.upper() == "BUYER"
+                        and mime.startswith("image/")
+                        else "submitted_file"
+                    ),
                 },
                 source=f"{submission.submitter_role}_UPLOAD",
                 node_id=evidence_item_id,
@@ -273,9 +289,12 @@ class DisputeService:
             else:
                 ship_node = existing_ship
 
-            # Close open question asking for merchant tracking
+            # A submitted tracking identifier satisfies only the merchant tracking
+            # request. It cannot answer an outstanding carrier lookup question.
             for q in graph.get_open_questions():
-                if "tracking" in q.label.lower() or "act_merchant_tracking" in q.id:
+                action = q.content.get("action") or {}
+                requested_action = action.get("action_id", "") if isinstance(action, dict) else ""
+                if requested_action == "act_merchant_tracking" or q.id == "q_act_merchant_tracking":
                     edge_ans = graph.add_edge(
                         source_id=ship_node.id,
                         target_id=q.id,
@@ -299,17 +318,29 @@ class DisputeService:
                 edges_created.extend(carrier_edges)
                 carrier_outcome_note = self._carrier_outcome_message(carrier_result)
 
-        # Close any open question nodes answered by this submission
-        open_questions = graph.get_open_questions()
-        for q in open_questions:
-            if nodes_created:
-                edge_ans = graph.add_edge(
-                    source_id=nodes_created[0],
-                    target_id=q.id,
-                    edge_type=EdgeType.ANSWERS,
-                    provenance=f"Submitted evidence directly addresses question: {q.label}"
-                )
-                edges_created.append(edge_ans.id)
+        # A document cannot answer every open question merely because it was
+        # uploaded. Only link the specifically requested action, and do not
+        # confuse an ANSWERS edge with independent verification.
+        if integrity_finding and submission.action_id:
+            eligible = {
+                "act_buyer_condition_photo": "condition_photo",
+                "act_merchant_listing": "merchant_listing",
+                "act_request_transaction_records": "submitted_file",
+                "act_request_transaction_reconciliation": "submitted_file",
+                "act_request_carrier_receipt": "submitted_file",
+                "act_request_signature_or_proof": "submitted_file",
+            }
+            item = ev_node
+            if (item and item.type == NodeType.EVIDENCE_ITEM
+                    and item.content.get("kind") == eligible.get(submission.action_id)):
+                for q in graph.get_open_questions():
+                    action = q.content.get("action", {})
+                    if isinstance(action, dict) and action.get("action_id") == submission.action_id:
+                        edge = graph.add_edge(
+                            item.id, q.id, EdgeType.ANSWERS,
+                            "Submitted file responds to requested action; content remains unverified."
+                        )
+                        edges_created.append(edge.id)
 
         # Run Decision-Readiness Evaluator
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
@@ -327,7 +358,7 @@ class DisputeService:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "actor": submission.submitter_role,
             "action": f"Submitted evidence ({', '.join(nodes_created)})",
-            "state_transition": f"{current_state.value} -> {new_state.value}",
+            "state_transition": f"{previous_state.value} -> {new_state.value}",
             "notes": submission.notes or "Evidence processed."
         })
 
@@ -350,7 +381,7 @@ class DisputeService:
             evidence_id=evidence_item_id,
             nodes_created=nodes_created,
             edges_created=edges_created,
-            previous_state=current_state,
+            previous_state=previous_state,
             new_state=new_state,
             readiness=readiness,
             integrity_finding=integrity_finding,
@@ -725,7 +756,10 @@ class DisputeService:
                     "actor": "SYSTEM",
                     "action": f"Intake completed for {dispute_id}",
                     "state_transition": f"CREATED -> {initial_state.value}",
-                    "notes": "Initial dispute case ingested with verified transaction and order records."
+                    "notes": (
+                        "Synthetic demonstration case initialized. Transaction and order "
+                        "records are fixture data, not independently externally verified."
+                    )
                 }]),
                 integrity_findings_json="[]",
             )

@@ -79,7 +79,8 @@ def test_conflicting_scans_without_explicit_contradiction_edge_are_caught():
     assert decision.chosen_action.action_id == "act_resolve_contradiction"
     assert "report_right" in decision.chosen_action.rationale
     assert "report_wrong" in decision.chosen_action.rationale
-    assert recommendation(graph, policy=HeuristicNBEPolicy()).chosen_action.action_id != "act_resolve_contradiction"
+    # Issue #13: default heuristic now also detects this inferred conflict.
+    assert recommendation(graph, policy=HeuristicNBEPolicy()).chosen_action.action_id == "act_resolve_contradiction"
 
 
 def test_submitted_verified_scan_does_not_count_as_carrier_proof():
@@ -88,7 +89,8 @@ def test_submitted_verified_scan_does_not_count_as_carrier_proof():
     decision = recommendation(graph)
     assert decision.chosen_action.action_id == "act_carrier_lookup"
     assert "Evidence basis: NONE" in decision.chosen_action.rationale
-    assert recommendation(graph, policy=HeuristicNBEPolicy()).chosen_action.action_id != "act_carrier_lookup"
+    # Issue #13: the heuristic now excludes uploaded scan assertions too.
+    assert recommendation(graph, policy=HeuristicNBEPolicy()).chosen_action.action_id == "act_carrier_lookup"
 
 
 def test_unavailable_lookup_falls_back_to_merchant_document():
