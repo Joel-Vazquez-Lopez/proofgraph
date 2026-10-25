@@ -27,6 +27,7 @@ from app.services.evidence_graph import EvidenceGraph
 from app.services.evaluator import DecisionReadinessEvaluator
 from app.services.nbe_policy import HeuristicNBEPolicy
 from app.services.image_integrity import EvidenceIntegrityAnalyzer
+from app.security.file_validator import validate_and_decode_base64_upload
 from app.services.carrier_service import CarrierVerificationService, CarrierVerificationResult
 from app.adapters.synthetic import SyntheticDisputeAdapter
 from app.adapters.paypal_sandbox import PayPalSandboxAdapter
@@ -140,22 +141,30 @@ class DisputeService:
 
         evidence_item_id = f"ev_{uuid.uuid4().hex[:8]}"
 
-        # Handle file upload if present
-        if submission.file_data_base64 and submission.file_name:
-            file_bytes = base64.b64decode(submission.file_data_base64)
-            mime = submission.mime_type or "application/octet-stream"
+        # JSON and multipart ingestion share the same decoded byte-size limit,
+        # extension, detected signature, and declared MIME checks.
+        if any(value is not None for value in (
+            submission.file_data_base64, submission.file_name, submission.mime_type
+        )):
+            if not all(value is not None for value in (
+                submission.file_data_base64, submission.file_name, submission.mime_type
+            )):
+                raise ValueError("file_data_base64, file_name and mime_type must be provided together.")
+            file_bytes, mime, safe_name = validate_and_decode_base64_upload(
+                submission.file_data_base64, submission.file_name, submission.mime_type
+            )
             integrity_finding = EvidenceIntegrityAnalyzer.analyze_image_bytes(
                 file_bytes=file_bytes,
-                file_name=submission.file_name,
+                file_name=safe_name,
                 mime_type=mime,
                 file_id=evidence_item_id
             )
             # Add EVIDENCE_ITEM node
             ev_node = graph.add_node(
                 node_type=NodeType.EVIDENCE_ITEM,
-                label=f"Uploaded File: {submission.file_name}",
+                label=f"Uploaded File: {safe_name}",
                 content={
-                    "file_name": submission.file_name,
+                    "file_name": safe_name,
                     "mime_type": mime,
                     "sha256": integrity_finding.sha256_hash,
                     "status": integrity_finding.integrity_status.value,
