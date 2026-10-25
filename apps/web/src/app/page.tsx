@@ -8,6 +8,7 @@ import { CaseList, DisputeSummaryData } from "@/components/CaseList";
 import { CaseOverview } from "@/components/CaseOverview";
 import { ReviewPackageModal } from "@/components/ReviewPackageModal";
 import { AdvancedWorkspace } from "@/components/AdvancedWorkspace";
+import { AIClaimsPanel } from "@/components/AIClaimsPanel";
 import { GraphNodeData } from "@/components/EvidenceGraphView";
 import { friendlyRequestError, getResponseError, isCurrentCase, submissionMessage } from "@/lib/investigation-actions.mjs";
 
@@ -343,6 +344,8 @@ export default function ProofGraphPage() {
                   uploading={uploading}
                   feedback={feedback}
                 />
+
+                <AIClaimsPanel key={dispute.dispute_id} disputeId={dispute.dispute_id} />
 
                 {/* Progressive disclosure: Evidence Graph, Audit Timeline, Diagnostics */}
                 <AdvancedWorkspace

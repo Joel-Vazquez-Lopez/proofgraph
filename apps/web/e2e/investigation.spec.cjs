@@ -54,6 +54,15 @@ async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false
       }
       return route.fulfill({ json: emptyList ? [] : cases });
     }
+    if (request.method() === "POST" && path.endsWith("/ai/extract")) {
+      return route.fulfill({ json: {
+        status: "FALLBACK_NOT_CONFIGURED", provider: "gemini", model: "gemini-3.5-flash-lite",
+        model_called: false, claims: [], rejected_items: 0,
+        message: "No real API key configured; no model was called.",
+        provenance: "NO_MODEL_OUTPUT — deterministic policy fallback only",
+        fallback_action_id: "act_merchant_tracking",
+      } });
+    }
     if (request.method() === "POST" && path.endsWith("/evidence")) {
       savedTracking = true;
       return route.fulfill({ json: { success: true, new_state: "INVESTIGATING", message: "Recorded" } });
@@ -158,4 +167,63 @@ test("failed initial case-list load offers retry instead of incorrectly claiming
   await expect(page.getByText("No cases are available for this account.")).toHaveCount(0);
   await page.getByRole("button", { name: "Retry loading cases" }).click();
   await expect(page.getByRole("button", { name: /Mechanical keyboard/ })).toBeVisible();
+});
+
+test("AI assistance shows explicit non-AI fallback instead of pretending a model ran", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Analyze dispute text with AI" })).toBeVisible();
+  await page.getByRole("button", { name: "Analyze dispute text with AI" }).click();
+  await expect(page.getByText(/No model call.*FALLBACK_NOT_CONFIGURED/)).toBeVisible();
+  await expect(page.getByText(/NO_MODEL_OUTPUT/)).toBeVisible();
+  await expect(page.getByText(/Separate deterministic investigation action/)).toBeVisible();
+});
+
+test("AI assistant UI labels exact source quote, named model and unverified provenance", async ({ page }) => {
+  await mockApi(page);
+  // Intercept ONLY the presentation test: this is NOT a live model.
+  await page.route("**/ai/extract", (route) => route.fulfill({ json: {
+    status: "MODEL_SUCCESS", provider: "openai", model: "gpt-4o-mini",
+    model_called: true, rejected_items: 0,
+    message: "Mocked provider response for UI-only test",
+    provenance: "MODEL_INFERENCE / UNVERIFIED — textual analysis, not evidence verification",
+    fallback_action_id: "act_merchant_tracking",
+    claims: [{
+      source_id: "case:buyer_claim", quote: "I did not receive the item.",
+      claim_type: "NON_RECEIPT", evidence_need: "HANDOFF_PROOF",
+      evidence_question: "Can delivery handoff or recipient acknowledgement be corroborated?",
+      inference_node_id: "ai_claim_test_only",
+    }],
+  }}));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Analyze dispute text with AI" }).click();
+  await expect(page.getByText(/Provider: openai.*gpt-4o-mini.*MODEL_SUCCESS/)).toBeVisible();
+  await expect(page.getByRole("region", { name: "AI claim extraction" }).getByText("I did not receive the item.")).toBeVisible();
+  await expect(page.getByText(/MODEL_INFERENCE \/ UNVERIFIED/)).toBeVisible();
+  await expect(page.getByText(/case:buyer_claim/)).toBeVisible();
+});
+
+test("Gemini success explicitly names free-tier model and quote provenance (mocked UI only)", async ({ page }) => {
+  await mockApi(page);
+  // This is a presentation stub; it is NOT evidence of a real Gemini request.
+  await page.route("**/ai/extract", (route) => route.fulfill({ json: {
+    status: "MODEL_SUCCESS", provider: "gemini", model: "gemini-3.5-flash-lite",
+    model_called: true, rejected_items: 0,
+    message: "Mocked Gemini reply for browser assertions only",
+    provenance: "MODEL_INFERENCE / UNVERIFIED — textual analysis, not evidence verification",
+    fallback_action_id: "act_merchant_tracking",
+    claims: [{
+      source_id: "case:buyer_claim", quote: "I did not receive the item.",
+      claim_type: "NON_RECEIPT", evidence_need: "HANDOFF_PROOF",
+      evidence_question: "Can delivery handoff or recipient acknowledgement be corroborated?",
+      inference_node_id: "ai_claim_mock_gemini",
+    }],
+  }}));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Analyze dispute text with AI" }).click();
+  const panel = page.getByRole("region", { name: "AI claim extraction" });
+  await expect(panel.getByText(/Provider: gemini.*gemini-3\.5-flash-lite.*MODEL_SUCCESS/)).toBeVisible();
+  await expect(panel.getByText("I did not receive the item.")).toBeVisible();
+  await expect(panel.getByText(/MODEL_INFERENCE \/ UNVERIFIED/)).toBeVisible();
+  await expect(panel.getByText(/case:buyer_claim/)).toBeVisible();
 });
