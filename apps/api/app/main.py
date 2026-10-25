@@ -25,6 +25,7 @@ from app.models.db_models import init_db
 from app.routers.health import router as health_router
 from app.routers.disputes import router as disputes_router
 from app.routers.evidence import router as evidence_router
+from app.routers.ai import router as ai_router
 
 
 # Ensure database tables exist
@@ -60,6 +61,7 @@ app.add_middleware(
 app.include_router(health_router, prefix=settings.API_V1_PREFIX)
 app.include_router(disputes_router, prefix=settings.API_V1_PREFIX)
 app.include_router(evidence_router, prefix=settings.API_V1_PREFIX)
+app.include_router(ai_router, prefix=settings.API_V1_PREFIX)
 
 
 @app.get("/")
