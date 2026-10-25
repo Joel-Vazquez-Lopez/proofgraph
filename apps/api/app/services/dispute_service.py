@@ -182,7 +182,8 @@ class DisputeService:
         if not case:
             raise KeyError(f"Dispute {dispute_id} not found.")
 
-        current_state = InvestigationState(case.state)
+        previous_state = InvestigationState(case.state)
+        current_state = previous_state
         # Transition to INVESTIGATING if currently AWAITING_EVIDENCE
         if current_state == InvestigationState.AWAITING_EVIDENCE:
             current_state = InvestigationStateMachine.transition(current_state, InvestigationState.INVESTIGATING)
@@ -273,9 +274,12 @@ class DisputeService:
             else:
                 ship_node = existing_ship
 
-            # Close open question asking for merchant tracking
+            # Recording merchant tracking satisfies the tracking-number request,
+            # not an outstanding independent carrier-telemetry lookup.
             for q in graph.get_open_questions():
-                if "tracking" in q.label.lower() or "act_merchant_tracking" in q.id:
+                action = q.content.get("action") or {}
+                requested_action = action.get("action_id", "") if isinstance(action, dict) else ""
+                if requested_action == "act_merchant_tracking" or q.id == "q_act_merchant_tracking":
                     edge_ans = graph.add_edge(
                         source_id=ship_node.id,
                         target_id=q.id,
@@ -299,17 +303,31 @@ class DisputeService:
                 edges_created.extend(carrier_edges)
                 carrier_outcome_note = self._carrier_outcome_message(carrier_result)
 
-        # Close any open question nodes answered by this submission
-        open_questions = graph.get_open_questions()
-        for q in open_questions:
-            if nodes_created:
-                edge_ans = graph.add_edge(
-                    source_id=nodes_created[0],
-                    target_id=q.id,
-                    edge_type=EdgeType.ANSWERS,
-                    provenance=f"Submitted evidence directly addresses question: {q.label}"
-                )
-                edges_created.append(edge_ans.id)
+        # A document may address the *specific* requested upload action,
+        # but neither a generic upload nor a tracking value answers every
+        # unrelated question. Linking a submitted document is NOT verifying it.
+        if integrity_finding and submission.action_id:
+            for q in graph.get_open_questions():
+                action = q.content.get("action") or {}
+                requested_action = action.get("action_id") if isinstance(action, dict) else None
+                if (
+                    requested_action == submission.action_id
+                    and requested_action in (
+                        "act_request_carrier_receipt",
+                        "act_request_signature_or_proof",
+                        "act_buyer_condition_photo",
+                    )
+                ):
+                    edge_ans = graph.add_edge(
+                        source_id=ev_node.id,
+                        target_id=q.id,
+                        edge_type=EdgeType.ANSWERS,
+                        provenance=(
+                            "Submitted document for the requested evidence action; "
+                            "authenticity and factual claims remain UNVERIFIED."
+                        ),
+                    )
+                    edges_created.append(edge_ans.id)
 
         # Run Decision-Readiness Evaluator
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
@@ -327,7 +345,7 @@ class DisputeService:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "actor": submission.submitter_role,
             "action": f"Submitted evidence ({', '.join(nodes_created)})",
-            "state_transition": f"{current_state.value} -> {new_state.value}",
+            "state_transition": f"{previous_state.value} -> {new_state.value}",
             "notes": submission.notes or "Evidence processed."
         })
 
@@ -350,7 +368,7 @@ class DisputeService:
             evidence_id=evidence_item_id,
             nodes_created=nodes_created,
             edges_created=edges_created,
-            previous_state=current_state,
+            previous_state=previous_state,
             new_state=new_state,
             readiness=readiness,
             integrity_finding=integrity_finding,
@@ -725,7 +743,10 @@ class DisputeService:
                     "actor": "SYSTEM",
                     "action": f"Intake completed for {dispute_id}",
                     "state_transition": f"CREATED -> {initial_state.value}",
-                    "notes": "Initial dispute case ingested with verified transaction and order records."
+                    "notes": (
+                        "Synthetic demonstration case initialized. Transaction and order "
+                        "records are fixture data, not independently externally verified."
+                    )
                 }]),
                 integrity_findings_json="[]",
             )
