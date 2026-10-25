@@ -83,7 +83,7 @@ class DecisionReadinessEvaluator:
         if len(shipments) == 1 and shipments[0].content.get("tracking_number"):
             satisfied.append("Shipment tracking identifier recorded; presence alone does not verify delivery.")
         else:
-            missing.append("Unique shipment tracking identifier for this order.")
+            missing.append("Carrier tracking identifier for this order (unique shipment required).")
 
         review = assess_inr_hypotheses(graph)
         statuses = {a.hypothesis_id: a.status for a in review.assessments}
