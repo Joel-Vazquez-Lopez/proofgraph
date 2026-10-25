@@ -72,6 +72,21 @@ Our implementation adheres to strict classification standards documented in [`do
 
 ---
 
+### Read-only PayPal Sandbox connectivity smoke test
+
+The actual backend adapter reads `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from exported environment variables or ignored local `.env` files (repository root or `apps/api`). With **Sandbox credentials only**, run:
+
+```bash
+cd apps/api
+python -m app.services.paypal_sandbox_smoke
+```
+
+This requests an OAuth token, reads the dispute list, and prints only redacted status/UTC metadata (no tokens, credentials, dispute IDs or full API bodies). HTTP 200 with zero disputes is **not** a permissions error; missing credentials report **BLOCKED**, not success. Optional existing-dispute details: `--dispute-id PP-D-...`.
+
+[Full verification evidence, permission troubleshooting, and opt-in Actions workflow](docs/paypal-sandbox-verification.md). The operator reported a successful direct live Sandbox test on October 25, 2026; a separate credential-bearing run of the ProofGraph adapter is required for independent backend live confirmation. Normal CI uses fake credentials and local HTTP contract responses; it never calls PayPal.
+
+---
+
 ## 4. Quickstart: Running Locally
 
 ### Prerequisites

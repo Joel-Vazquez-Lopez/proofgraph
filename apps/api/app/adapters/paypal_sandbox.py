@@ -53,14 +53,16 @@ class PayPalSandboxAdapter(DisputeAdapter):
                 if resp.status_code != 200:
                     raise PayPalAPIError(
                         status_code=resp.status_code,
-                        message=f"Failed to obtain OAuth token: {resp.text}"
+                        message="PayPal OAuth token request rejected by upstream."
                     )
                 data = resp.json()
+                if not isinstance(data, dict) or not isinstance(data.get("access_token"), str) or not data["access_token"]:
+                    raise PayPalAPIError(status_code=502, message="Malformed OAuth token response.")
                 self._access_token = data["access_token"]
                 self._token_expiry = now + data.get("expires_in", 32400)
                 return self._access_token
         except httpx.RequestError as e:
-            raise PayPalAPIError(status_code=503, message=f"Network error connecting to PayPal: {str(e)}")
+            raise PayPalAPIError(status_code=503, message="Network error connecting to PayPal.")
 
     def list_disputes(self) -> List[Dict[str, Any]]:
         if not self.is_configured():
@@ -77,10 +79,18 @@ class PayPalSandboxAdapter(DisputeAdapter):
                     },
                 )
                 if resp.status_code != 200:
-                    raise PayPalAPIError(status_code=resp.status_code, message=resp.text)
-                return resp.json().get("items", [])
+                    raise PayPalAPIError(
+                        status_code=resp.status_code,
+                        message="PayPal Disputes list request rejected by upstream.",
+                    )
+                payload = resp.json()
+                # A valid empty result is {"items": []}; missing items is not proof
+                # that the merchant has zero disputes.
+                if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+                    raise PayPalAPIError(status_code=502, message="Unexpected Disputes list response schema.")
+                return payload["items"]
         except httpx.RequestError as e:
-            raise PayPalAPIError(status_code=503, message=str(e))
+            raise PayPalAPIError(status_code=503, message="Network error connecting to PayPal.")
 
     def get_dispute(self, dispute_id: str) -> Optional[Dict[str, Any]]:
         if not self.is_configured():
@@ -99,10 +109,13 @@ class PayPalSandboxAdapter(DisputeAdapter):
                 if resp.status_code == 404:
                     return None
                 if resp.status_code != 200:
-                    raise PayPalAPIError(status_code=resp.status_code, message=resp.text)
+                    raise PayPalAPIError(
+                        status_code=resp.status_code,
+                        message="PayPal dispute details request rejected by upstream.",
+                    )
                 return resp.json()
         except httpx.RequestError as e:
-            raise PayPalAPIError(status_code=503, message=str(e))
+            raise PayPalAPIError(status_code=503, message="Network error connecting to PayPal.")
 
     def submit_evidence(self, dispute_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -126,7 +139,10 @@ class PayPalSandboxAdapter(DisputeAdapter):
                     },
                 )
                 if resp.status_code not in (200, 204):
-                    raise PayPalAPIError(status_code=resp.status_code, message=resp.text)
+                    raise PayPalAPIError(
+                        status_code=resp.status_code,
+                        message="PayPal provide-evidence request rejected by upstream.",
+                    )
                 return resp.json() if resp.text else {"status": "SUCCESS"}
         except httpx.RequestError as e:
-            raise PayPalAPIError(status_code=503, message=str(e))
+            raise PayPalAPIError(status_code=503, message="Network error connecting to PayPal.")
