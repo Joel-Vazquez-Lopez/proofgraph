@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 
 from packages.shared_schemas.models import (
     DisputeCategory,
+    ActionType,
     InvestigationState,
     DataSourceType,
     NodeType,
@@ -53,6 +54,30 @@ class DisputeService:
             })
             return policy.evaluate_candidates(category, graph, readiness)
         return self.nbe_policy.evaluate_candidates(category, graph, readiness)
+
+    @staticmethod
+    def _record_discriminative_question(graph: EvidenceGraph, decision: PolicyDecision) -> None:
+        """Persist an offered action, without implying successful execution."""
+        if settings.NBE_POLICY_TYPE != "discriminative":
+            return
+        action = decision.chosen_action
+        if not action or action.action_type == ActionType.ESCALATE_HUMAN_REVIEW:
+            return
+        already = any(
+            isinstance(q.content.get("action"), dict)
+            and q.content["action"].get("action_id") == action.action_id
+            for q in graph.get_nodes_by_type(NodeType.QUESTION)
+        )
+        if not already:
+            graph.add_node(
+                node_type=NodeType.QUESTION,
+                label=action.title,
+                content={"action": action.model_dump(), "action_status": "RECOMMENDED"},
+                source="INVESTIGATION_ENGINE",
+                node_id=f"q_{action.action_id}",
+                origin=EvidenceOrigin.MODEL_INFERENCE,
+                verification_status=EvidenceVerificationStatus.UNVERIFIED,
+            )
 
     def list_disputes(self) -> List[DisputeSummary]:
         self._ensure_seed_scenarios()
@@ -257,6 +282,7 @@ class DisputeService:
 
         # Update NBE Policy Decision
         policy_decision = self._investigation_policy(DisputeCategory(case.category), graph, readiness, DataSourceType(case.data_source))
+        self._record_discriminative_question(graph, policy_decision)
 
         # Update Timeline
         timeline = json.loads(case.timeline_json or "[]")
@@ -409,6 +435,7 @@ class DisputeService:
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
         new_state = InvestigationStateMachine.transition(current_state, readiness.recommended_state)
         policy_decision = self._investigation_policy(DisputeCategory(case.category), graph, readiness, DataSourceType(case.data_source))
+        self._record_discriminative_question(graph, policy_decision)
 
         timeline = json.loads(case.timeline_json or "[]")
         timeline.append({
@@ -554,6 +581,7 @@ class DisputeService:
             
             # Evaluate NBE policy
             policy_decision = self._investigation_policy(category, graph, readiness, DataSourceType.SYNTHETIC_FIXTURE)
+            self._record_discriminative_question(graph, policy_decision)
 
             # Initial state
             initial_state = InvestigationState.AWAITING_EVIDENCE if policy_decision.chosen_action else readiness.recommended_state
