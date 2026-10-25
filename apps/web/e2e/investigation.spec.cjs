@@ -198,7 +198,7 @@ test("AI assistant UI labels exact source quote, named model and unverified prov
   await page.goto("/");
   await page.getByRole("button", { name: "Analyze dispute text with AI" }).click();
   await expect(page.getByText(/Provider: openai.*gpt-4o-mini.*MODEL_SUCCESS/)).toBeVisible();
-  await expect(page.getByText("I did not receive the item.")).toBeVisible();
+  await expect(page.getByRole("region", { name: "AI claim extraction" }).getByText("I did not receive the item.")).toBeVisible();
   await expect(page.getByText(/MODEL_INFERENCE \/ UNVERIFIED/)).toBeVisible();
   await expect(page.getByText(/case:buyer_claim/)).toBeVisible();
 });
