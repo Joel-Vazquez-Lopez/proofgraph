@@ -150,7 +150,7 @@ class CarrierVerificationService:
                 has_delivery_photo=False,
                 origin=EvidenceOrigin.UNVERIFIED,
                 is_synthetic=False,
-                verification_source="CarrierGateway (UNCONFIGURED; no live request)",
+                verification_source="CarrierGateway (UNCONFIGURED)",
                 audit_note=(
                     "External carrier telemetry query unconfigured; no carrier API was contacted. "
                     "Tracking status remains UNVERIFIED. Cannot assume delivery."
