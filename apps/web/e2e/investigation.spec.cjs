@@ -108,7 +108,7 @@ test("non-shipping disputes show an executable upload or clearly manual next ste
 test("API error produces an actionable retry", async ({ page }) => {
   await mockApi(page, { failFirstDetail: true });
   await page.goto("/");
-  await expect(page.getByRole("alert")).toContainText("Temporary case service outage");
+  await expect(page.getByRole("alert").filter({ hasText: "Temporary case service outage" })).toBeVisible();
   await page.getByRole("button", { name: "Retry case details" }).click();
   await expect(page.getByText("Add tracking information")).toBeVisible();
 });
