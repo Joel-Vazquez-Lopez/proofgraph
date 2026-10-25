@@ -25,7 +25,7 @@ function detail(summary, hasTracking) {
   if (mismatch) {
     nodes.push(node("delivery observation", "OBSERVATION", { tracking_number: "TRACK-42", status: "DELIVERED", delivered_to_address: { city: "Seattle", state: "WA", postal_code: "98101" } }));
   }
-  const missing = mismatch ? [] : (snd ? ["CONDITION_DOCUMENT"] : inad ? [hasTracking ? "DELIVERY_EVIDENCE" : "TRACKING_NUMBER"] : ["TRANSACTION_LEDGER_CHECK"]);
+  const missing = mismatch ? ["CARRIER_ADDRESS_CONFIRMATION"] : (snd ? ["CONDITION_DOCUMENT"] : inad ? [hasTracking ? "DELIVERY_EVIDENCE" : "TRACKING_NUMBER"] : ["TRANSACTION_LEDGER_CHECK"]);
   return {
     ...summary, transaction_id: "TX-123",
     buyer_claim: snd ? "Condition does not match the listing." : inad ? "I did not receive the item." : "I may have paid twice.",
@@ -83,6 +83,8 @@ test("merchant submits tracking and sees the changed investigation and persisten
   await expect(page.getByText(/Delivery is not confirmed/).first()).toBeVisible();
   await page.getByRole("button", { name: /Headphones/ }).click();
   await expect(page.getByText("Conflicting evidence — human review needed.")).toBeVisible();
+  await expect(page.getByText("Also still needed")).toBeVisible();
+  await expect(page.getByText("CARRIER ADDRESS CONFIRMATION")).toBeVisible();
   await expect(page.getByText("Portland, OR, 97201").first()).toBeVisible();
   await expect(page.getByText("Seattle, WA, 98101").first()).toBeVisible();
   await page.getByRole("button", { name: "Review this issue" }).click();
