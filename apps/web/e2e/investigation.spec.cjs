@@ -37,9 +37,10 @@ function detail(summary, hasTracking) {
   };
 }
 
-async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false } = {}) {
+async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false, failFirstList = false, emptyList = false } = {}) {
   let savedTracking = false;
   let failed = false;
+  let failedList = false;
   let delayed = false;
   await page.route("**/api/v1/disputes**", async (route) => {
     const request = route.request();
@@ -47,7 +48,11 @@ async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false
     const segments = path.split("/");
     const id = segments[4];
     if (request.method() === "GET" && path === "/api/v1/disputes") {
-      return route.fulfill({ json: cases });
+      if (failFirstList && !failedList) {
+        failedList = true;
+        return route.fulfill({ status: 503, json: { detail: "Cases are temporarily unavailable" } });
+      }
+      return route.fulfill({ json: emptyList ? [] : cases });
     }
     if (request.method() === "POST" && path.endsWith("/evidence")) {
       savedTracking = true;
@@ -135,4 +140,21 @@ test("mobile viewport fits without horizontal overflow and case cards are keyboa
   await expect(page.getByText("Add a photo or document")).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(2);
+});
+
+test("empty account shows a helpful empty state without fabricating cases", async ({ page }) => {
+  await mockApi(page, { emptyList: true });
+  await page.goto("/");
+  await expect(page.getByText("No cases are available for this account.")).toBeVisible();
+  await expect(page.getByText("Select a case to begin investigation.")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
+test("failed initial case-list load offers retry instead of incorrectly claiming no cases", async ({ page }) => {
+  await mockApi(page, { failFirstList: true });
+  await page.goto("/");
+  await expect(page.getByRole("alert").filter({ hasText: "Cases are temporarily unavailable" })).toBeVisible();
+  await expect(page.getByText("No cases are available for this account.")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry loading cases" }).click();
+  await expect(page.getByRole("button", { name: /Mechanical keyboard/ })).toBeVisible();
 });
