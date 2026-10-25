@@ -276,9 +276,21 @@ def test_optional_live_gemini_claim_extraction(monkeypatch):
         assert result["model_called"] is True
         assert result["status"] in ("MODEL_SUCCESS", "MODEL_PARTIAL"), result["message"]
         assert result["claims"]
-        assert all(c["quote"] in text and c["source_id"] == claim["id"]
-                   for c in result["claims"])
         after = state(api)
+        # Gemini may cite any genuine seeded party statement, not just buyer text.
+        # Validate every emitted quote against the exact allowed source node.
+        source_texts = {
+            n["id"]: n["content"]["text"]
+            for n in after["evidence_graph"]["nodes"]
+            if n["type"] == "CLAIM" and isinstance(n["content"].get("text"), str)
+        }
+        with SessionLocal() as db:
+            persisted = db.query(DisputeCaseDB).filter_by(dispute_id=CASE_ID).one()
+            source_texts["case:buyer_claim"] = persisted.buyer_claim
+            source_texts["case:seller_response"] = persisted.seller_response or ""
+        assert all(c["source_id"] in source_texts and
+                   c["quote"] in source_texts[c["source_id"]]
+                   for c in result["claims"])
         assert after["state"] == before["state"]
         assert after["readiness"] == before["readiness"]
         nodes = [n for n in after["evidence_graph"]["nodes"]
