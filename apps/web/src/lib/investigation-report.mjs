@@ -35,8 +35,14 @@ export function evidenceEntries(dispute) {
   return nodes.filter((node) => types.has(node?.type)).map((node) => ({
     id: clean(node.id) || clean(node.label),
     title: clean(node.label) || clean(node.type) || "Evidence record",
-    source: clean(node.source) || "Source not specified",
-    status: clean(node.verification_status) || "UNVERIFIED",
+    // Provider-like fixture source tags (e.g. PAYPAL_API) are internal labels,
+    // not proof that a live provider was contacted.
+    source: node.origin === "SYNTHETIC_FIXTURE"
+      ? "Demonstration fixture (no live PayPal or carrier check)"
+      : clean(node.source) || "Source not specified",
+    verification: evidenceProvenance(node).externallyVerified
+      ? "Independently verified per API provenance"
+      : "Not independently verified",
     ...evidenceProvenance(node),
   }));
 }
@@ -72,7 +78,7 @@ export function generateReviewMarkdown(dispute, productName, buyerName, generate
   ];
   if (!view.evidence.length) lines.push("- No evidence items available.");
   for (const record of view.evidence) {
-    lines.push(`- ${record.title} — ${record.label}; ${record.description}; source: ${record.source}; API status: ${record.status}`);
+    lines.push(`- ${record.title} — ${record.label}; ${record.description}; source: ${record.source}; verification: ${record.verification}`);
   }
   lines.push("", "## Requirements met (evaluator assessment, not proof of independent verification)");
   if (!view.requirements.length) lines.push("- None listed.");

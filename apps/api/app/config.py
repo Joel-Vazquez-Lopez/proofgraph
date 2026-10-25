@@ -1,5 +1,15 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic import BaseModel
+
+# Both the running FastAPI backend and the Sandbox smoke command read the
+# same local credentials. Explicit process environment variables take precedence.
+# Neither file is tracked by Git (see .gitignore).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(_REPO_ROOT / ".env", override=False)
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 class Settings(BaseModel):

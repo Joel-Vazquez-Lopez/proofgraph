@@ -19,7 +19,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from "lucide-react";
-import { merchantNextStep } from "@/lib/merchant-workflow.mjs";
+import { latestCarrierObservation, merchantNextStep } from "@/lib/merchant-workflow.mjs";
 
 interface CaseOverviewProps {
   dispute: any;
@@ -66,28 +66,29 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
   const shipmentNode = nodes.find((n: any) => n.type === "SHIPMENT");
   const orderNode = nodes.find((n: any) => n.type === "ORDER");
   const transactionNode = nodes.find((n: any) => n.type === "TRANSACTION");
+  const conditionDocument = nodes.find((n: any) => n.type === "EVIDENCE_ITEM" && n.origin === "USER_SUBMITTED");
   const isItemNotReceived = dispute.category === "ITEM_NOT_RECEIVED";
 
   const hasTracking = !!shipmentNode?.content?.tracking_number;
   // The API separates verification_status (VERIFIED/UNVERIFIED) from origin.
   // A synthetic record must never be described as independent verification.
-  const carrierObservation = nodes.find(
-    (n: any) =>
-      n.type === "OBSERVATION" &&
-      hasTracking &&
-      n.content?.tracking_number === shipmentNode.content.tracking_number &&
-      typeof n.content?.status === "string"
-  );
+  const carrierObservation = latestCarrierObservation(shipmentNode, nodes);
   const hasDeliveryRecord =
     carrierObservation?.verification_status === "VERIFIED" &&
     carrierObservation?.content?.status === "DELIVERED";
   const isDemoDeliveryRecord = hasDeliveryRecord && carrierObservation?.origin === "SYNTHETIC_FIXTURE";
-  const isExternalDeliveryRecord = hasDeliveryRecord && carrierObservation?.origin === "VERIFIED_EXTERNAL";
+  const isExternalDeliveryRecord = hasDeliveryRecord &&
+    carrierObservation?.origin === "VERIFIED_EXTERNAL" &&
+    carrierObservation?.metadata?.independently_verified !== false;
+  const lastCarrierStatus = carrierObservation?.content?.status;
   const orderDestination = orderNode?.content?.destination_address;
   const deliveredDestination = carrierObservation?.content?.delivered_to_address;
   const formatLocation = (address: any): string =>
     [address?.city, address?.state, address?.postal_code].filter(Boolean).join(", ");
-  const nextStep = merchantNextStep({ isReady, isReview, category: dispute.category, hasTracking, hasDeliveryRecord });
+  const nextStep = merchantNextStep({
+    isReady, isReview, category: dispute.category, hasTracking, hasDeliveryRecord,
+    hasConditionEvidence: !!conditionDocument,
+  });
 
   const getHumanCategory = (cat: string) => {
     if (cat === "ITEM_NOT_RECEIVED") return "Item not received";
@@ -107,7 +108,9 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
         return "The customer disputes delivery. The available records contain a discrepancy that needs human review.";
       }
       if (!hasDeliveryRecord) {
-        return "The customer disputes delivery. Tracking is recorded, but a confirmed delivery record is not available in this case.";
+        return lastCarrierStatus && lastCarrierStatus !== "DELIVERED"
+          ? `The customer disputes delivery. The latest ${dispute.data_source === "SYNTHETIC_FIXTURE" ? "simulated " : ""}carrier result is ${lastCarrierStatus.replace(/_/g, " ").toLowerCase()}; delivery has not been independently confirmed.`
+          : "The customer disputes delivery. Tracking is recorded, but independent delivery verification is not available in this case.";
       }
       return isDemoDeliveryRecord
         ? "The customer disputes delivery. Simulated carrier records show delivery; no live carrier confirmation has been obtained."
@@ -190,10 +193,16 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
         </div>
 
-        {/* Concise plain-English summary */}
-        <p className="text-sm text-slate-700 leading-relaxed">
-          {getConciseSummary()}
-        </p>
+        <div className="rounded-xl bg-blue-50/60 border border-blue-100 p-3.5">
+          <h3 className="text-xs font-bold text-blue-900">Customer says</h3>
+          <p className="text-sm text-slate-800 mt-1 leading-relaxed">
+            {dispute.buyer_claim || "No customer statement is available yet."}
+          </p>
+        </div>
+        <div>
+          <h3 className="text-xs font-bold text-slate-700 mb-1">What this means</h3>
+          <p className="text-sm text-slate-700 leading-relaxed">{getConciseSummary()}</p>
+        </div>
 
         {/* View original statements (progressive disclosure) */}
         <div>
@@ -206,7 +215,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
             ) : (
               <ChevronDown className="w-3.5 h-3.5" />
             )}
-            <span>{showOriginalStatements ? "Hide original statements" : "View original statements"}</span>
+            <span>{showOriginalStatements ? "Hide merchant and case details" : "View merchant and case details"}</span>
           </button>
 
           {showOriginalStatements && (
@@ -219,7 +228,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                   <span className="text-xs font-bold text-slate-700">{buyerName} — Customer statement</span>
                 </div>
                 <p className="text-xs text-slate-700 italic leading-relaxed">
-                  "{dispute.buyer_claim || "Item did not arrive."}"
+                  "{dispute.buyer_claim || "No customer statement on file."}"
                 </p>
                 <p className="text-[10px] text-slate-400 mt-2">
                   Opened {new Date(dispute.created_at).toLocaleDateString()}
@@ -234,10 +243,12 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                   <span className="text-xs font-bold text-slate-700">Merchant record</span>
                 </div>
                 <p className="text-xs text-slate-700 italic leading-relaxed">
-                  "{dispute.seller_response || "Order was fulfilled and shipped."}"
+                  "{dispute.seller_response || "No merchant response on file."}"
                 </p>
                 <p className="text-[10px] text-slate-400 mt-2">
-                  Order #{orderNode?.content?.order_id || dispute.transaction_id || "ORD-2026"}
+                  {orderNode?.content?.order_id
+                    ? `Order #${orderNode.content.order_id}`
+                    : "Order ID not available"}
                 </p>
               </div>
             </div>
@@ -301,7 +312,22 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                         ? "Simulated carrier data shows delivery; no live check was made."
                         : isExternalDeliveryRecord
                         ? "An independently sourced carrier record shows delivery."
-                        : "Delivery is not confirmed by available carrier evidence."}
+                        : lastCarrierStatus
+                          ? `Latest lookup: ${lastCarrierStatus.replace(/_/g, " ").toLowerCase()}. Independent delivery is not confirmed.`
+                          : "Delivery is not confirmed by available carrier evidence."}
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {conditionDocument && (
+                <div className="p-3 rounded-xl bg-blue-50/60 border border-blue-200/60 text-slate-800 flex items-start gap-2.5">
+                  <FileText className="w-3.5 h-3.5 text-blue-700 mt-0.5 shrink-0" />
+                  <div>
+                    <span className="font-semibold">Merchant document received</span>
+                    <p className="text-[11px] text-slate-600 mt-0.5 break-words">
+                      {conditionDocument.content?.file_name || "Document on file"} was stored with a file fingerprint.
+                      It is merchant-submitted evidence, not independently authenticated.
                     </p>
                   </div>
                 </div>
@@ -498,15 +524,16 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                 </h3>
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
                   To check whether this item was delivered, please enter the carrier and tracking number from your shipping records.
-                  Saving tracking does not itself verify delivery. The API may also attempt a simulated carrier lookup on demonstration cases.
+                  First save your tracking number. It will remain unverified until you choose to run a separate carrier lookup.
                 </p>
               </div>
 
               <form onSubmit={handleTrackingSubmit} className="space-y-3 max-w-lg">
                 <div className="grid grid-cols-3 gap-3">
                   <div>
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Carrier</label>
+                    <label htmlFor="merchant-carrier" className="block text-[11px] font-bold text-slate-600 mb-1">Carrier</label>
                     <select
+                      id="merchant-carrier"
                       value={carrier}
                       onChange={(e) => setCarrier(e.target.value)}
                       className="w-full text-xs rounded-xl border border-slate-300 p-2.5 bg-white focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -518,8 +545,9 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                     </select>
                   </div>
                   <div className="col-span-2">
-                    <label className="block text-[11px] font-bold text-slate-600 mb-1">Tracking number</label>
+                    <label htmlFor="merchant-tracking" className="block text-[11px] font-bold text-slate-600 mb-1">Tracking number</label>
                     <input
+                      id="merchant-tracking"
                       type="text"
                       value={trackingNumber}
                       onChange={(e) => setTrackingNumber(e.target.value)}
@@ -530,7 +558,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                 </div>
 
                 <p className="text-[11px] text-slate-500">
-                  Carrier lookup results depend on case configuration. Demonstration fixtures must not be treated as independent checks.
+                  ProofGraph has not sent this information to PayPal. Demonstration lookups are simulated and do not contact a carrier.
                 </p>
 
                 <button
@@ -634,6 +662,25 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
             </div>
           </div>
 
+        /* CONDITION DOCUMENT STORED — no repeat-upload as the main action */
+        ) : nextStep === "condition-submitted" ? (
+          <div className="flex items-start gap-4">
+            <div className="w-11 h-11 rounded-2xl bg-blue-100 flex items-center justify-center shrink-0">
+              <FileText className="w-5 h-5 text-blue-700" />
+            </div>
+            <div className="flex-1 space-y-3">
+              <h3 className="text-sm font-bold text-slate-900">Your document is on file</h3>
+              <p className="text-xs text-slate-600 leading-relaxed">
+                ProofGraph stored your document, but has not verified that its contents are authentic or submitted it to PayPal.
+                Review the updated evidence and any remaining questions before taking further action.
+              </p>
+              <button type="button" onClick={onOpenReviewModal}
+                className="px-4 py-2.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-bold flex items-center gap-2">
+                <FileText className="w-3.5 h-3.5" />
+                <span>Review updated case summary</span>
+              </button>
+            </div>
+          </div>
         /* FALLBACK */
         ) : (
           <div className="space-y-3">

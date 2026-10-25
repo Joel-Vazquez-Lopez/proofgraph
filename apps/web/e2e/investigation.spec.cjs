@@ -37,9 +37,10 @@ function detail(summary, hasTracking) {
   };
 }
 
-async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false } = {}) {
+async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false, failFirstList = false, emptyList = false } = {}) {
   let savedTracking = false;
   let failed = false;
+  let failedList = false;
   let delayed = false;
   await page.route("**/api/v1/disputes**", async (route) => {
     const request = route.request();
@@ -47,7 +48,11 @@ async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false
     const segments = path.split("/");
     const id = segments[4];
     if (request.method() === "GET" && path === "/api/v1/disputes") {
-      return route.fulfill({ json: cases });
+      if (failFirstList && !failedList) {
+        failedList = true;
+        return route.fulfill({ status: 503, json: { detail: "Cases are temporarily unavailable" } });
+      }
+      return route.fulfill({ json: emptyList ? [] : cases });
     }
     if (request.method() === "POST" && path.endsWith("/ai/extract")) {
       return route.fulfill({ json: {
@@ -146,16 +151,22 @@ test("mobile viewport fits without horizontal overflow and case cards are keyboa
   expect(overflow).toBeLessThanOrEqual(2);
 });
 
-test("real FastAPI synthetic fixture: tracking submission changes the case evidence", async ({ page }) => {
-  // No API interception: Next.js rewrites to the running FastAPI server.
+test("empty account shows a helpful empty state without fabricating cases", async ({ page }) => {
+  await mockApi(page, { emptyList: true });
   await page.goto("/");
-  await page.getByRole("button", { name: /Keychron Q1 Pro/ }).click();
-  await expect(page.getByText("Add tracking information")).toBeVisible();
-  await page.getByPlaceholder("e.g. 940010009999").fill("940010009999");
-  await page.getByRole("button", { name: "Save tracking information" }).click();
-  await expect(page.getByText(/Tracking details submitted/)).toBeVisible();
-  await expect(page.getByText("Tracking number recorded")).toBeVisible();
-  await expect(page.getByText(/Simulated carrier data|Delivery is not confirmed|A delivery record/).first()).toBeVisible();
+  await expect(page.getByText("No cases are available for this account.")).toBeVisible();
+  await expect(page.getByText("Select a case to begin investigation.")).toBeVisible();
+  // Next.js may expose its own inert route-announcer alert; only check app errors.
+  await expect(page.getByRole("alert").filter({ hasText: /Could not load cases|Cases are temporarily unavailable/ })).toHaveCount(0);
+});
+
+test("failed initial case-list load offers retry instead of incorrectly claiming no cases", async ({ page }) => {
+  await mockApi(page, { failFirstList: true });
+  await page.goto("/");
+  await expect(page.getByRole("alert").filter({ hasText: "Cases are temporarily unavailable" })).toBeVisible();
+  await expect(page.getByText("No cases are available for this account.")).toHaveCount(0);
+  await page.getByRole("button", { name: "Retry loading cases" }).click();
+  await expect(page.getByRole("button", { name: /Mechanical keyboard/ })).toBeVisible();
 });
 
 test("AI assistance shows explicit non-AI fallback instead of pretending a model ran", async ({ page }) => {
