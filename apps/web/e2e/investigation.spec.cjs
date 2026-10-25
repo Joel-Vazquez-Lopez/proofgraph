@@ -49,6 +49,15 @@ async function mockApi(page, { failFirstDetail = false, delayFirstDetail = false
     if (request.method() === "GET" && path === "/api/v1/disputes") {
       return route.fulfill({ json: cases });
     }
+    if (request.method() === "POST" && path.endsWith("/ai/extract")) {
+      return route.fulfill({ json: {
+        status: "FALLBACK_NOT_CONFIGURED", provider: "openai", model: "gpt-4o-mini",
+        model_called: false, claims: [], rejected_items: 0,
+        message: "No real API key configured; no model was called.",
+        provenance: "NO_MODEL_OUTPUT — deterministic policy fallback only",
+        fallback_action_id: "act_merchant_tracking",
+      } });
+    }
     if (request.method() === "POST" && path.endsWith("/evidence")) {
       savedTracking = true;
       return route.fulfill({ json: { success: true, new_state: "INVESTIGATING", message: "Recorded" } });
@@ -147,4 +156,38 @@ test("real FastAPI synthetic fixture: tracking submission changes the case evide
   await expect(page.getByText(/Tracking details submitted/)).toBeVisible();
   await expect(page.getByText("Tracking number recorded")).toBeVisible();
   await expect(page.getByText(/Simulated carrier data|Delivery is not confirmed|A delivery record/).first()).toBeVisible();
+});
+
+test("AI assistance shows explicit non-AI fallback instead of pretending a model ran", async ({ page }) => {
+  await mockApi(page);
+  await page.goto("/");
+  await expect(page.getByRole("button", { name: "Analyze dispute text with AI" })).toBeVisible();
+  await page.getByRole("button", { name: "Analyze dispute text with AI" }).click();
+  await expect(page.getByText(/No model call.*FALLBACK_NOT_CONFIGURED/)).toBeVisible();
+  await expect(page.getByText(/NO_MODEL_OUTPUT/)).toBeVisible();
+  await expect(page.getByText(/Separate deterministic investigation action/)).toBeVisible();
+});
+
+test("AI assistant UI labels exact source quote, named model and unverified provenance", async ({ page }) => {
+  await mockApi(page);
+  // Intercept ONLY the presentation test: this is NOT a live model.
+  await page.route("**/ai/extract", (route) => route.fulfill({ json: {
+    status: "MODEL_SUCCESS", provider: "openai", model: "gpt-4o-mini",
+    model_called: true, rejected_items: 0,
+    message: "Mocked provider response for UI-only test",
+    provenance: "MODEL_INFERENCE / UNVERIFIED — textual analysis, not evidence verification",
+    fallback_action_id: "act_merchant_tracking",
+    claims: [{
+      source_id: "case:buyer_claim", quote: "I did not receive the item.",
+      claim_type: "NON_RECEIPT", evidence_need: "HANDOFF_PROOF",
+      evidence_question: "Can delivery handoff or recipient acknowledgement be corroborated?",
+      inference_node_id: "ai_claim_test_only",
+    }],
+  }}));
+  await page.goto("/");
+  await page.getByRole("button", { name: "Analyze dispute text with AI" }).click();
+  await expect(page.getByText(/Provider: openai.*gpt-4o-mini.*MODEL_SUCCESS/)).toBeVisible();
+  await expect(page.getByText("I did not receive the item.")).toBeVisible();
+  await expect(page.getByText(/MODEL_INFERENCE \/ UNVERIFIED/)).toBeVisible();
+  await expect(page.getByText(/case:buyer_claim/)).toBeVisible();
 });
