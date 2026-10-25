@@ -132,3 +132,19 @@ test("offline network failures have a clear retry path while API details remain 
   assert.match(friendlyRequestError(new TypeError("Failed to fetch"), "Could not load cases"), /Could not load cases.*Check your connection.*retry/);
   assert.equal(friendlyRequestError(new Error("Temporary service issue"), "Could not load cases"), "Temporary service issue");
 });
+
+test("simulated PayPal-looking records never appear as live verified sources in merchant review", () => {
+  const syntheticPayment = {
+    id: "tx-demo", type: "TRANSACTION", label: "Demo transaction",
+    source: "PAYPAL_API", origin: "SYNTHETIC_FIXTURE",
+    verification_status: "VERIFIED", content: { amount: 100 },
+  };
+  const view = investigationSummary(sampleDispute([syntheticPayment]));
+  assert.equal(view.evidence[0].externallyVerified, false);
+  assert.match(view.evidence[0].source, /Demonstration fixture/);
+  assert.equal(view.evidence[0].verification, "Not independently verified");
+  const markdown = generateReviewMarkdown(sampleDispute([syntheticPayment]), "Item", "Buyer", "2026-10-25");
+  assert.match(markdown, /Demonstration fixture \(no live PayPal or carrier check\)/);
+  assert.match(markdown, /verification: Not independently verified/);
+  assert.doesNotMatch(markdown, /PAYPAL_API|API status: VERIFIED|independently verified per API provenance/i);
+});
