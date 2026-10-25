@@ -347,5 +347,5 @@ def test_late_contradiction_reopens_decision_ready_case_for_review(client):
     detail = tc.get(f"/api/v1/disputes/{case_id}").json()
     assert detail["state"] == "REVIEW_REQUIRED"
     assert not detail["readiness"]["is_decision_ready"]
-    assert "late_conflict" not in " ".join(detail["readiness"]["active_contradictions"]) or detail["readiness"]["active_contradictions"]
+    assert any("Buyer photo condition differs" in reason for reason in detail["readiness"]["active_contradictions"])
     assert detail["current_policy_decision"]["chosen_action"]["action_id"] == "act_resolve_contradiction"
