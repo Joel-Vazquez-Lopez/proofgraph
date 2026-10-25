@@ -95,7 +95,10 @@ def test_complete_merchant_journey_uses_real_api_and_persists_auditable_package(
 
     submitted = submit_tracking(client)
     assert submitted.status_code == 200, submitted.text
+    assert submitted.json()["previous_state"] == "AWAITING_EVIDENCE"
+    assert submitted.json()["new_state"] == "INVESTIGATING"
     after_submit = detail(client)
+    assert after_submit["timeline"][-1]["state_transition"] == "AWAITING_EVIDENCE -> INVESTIGATING"
     shipment = nodes(after_submit["evidence_graph"], "SHIPMENT")[0]
     assert shipment["content"]["tracking_number"] == MATCHING_TRACKING
     assert shipment["verification_status"] == "UNVERIFIED"
