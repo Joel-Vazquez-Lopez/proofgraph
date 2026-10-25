@@ -4,6 +4,7 @@ Tests are contract-oriented rather than checking the old five scenario labels.
 """
 import base64
 import io
+import json
 
 import pytest
 from fastapi.testclient import TestClient
@@ -298,3 +299,53 @@ def test_duplicate_transactions_for_different_payers_need_human_reconciliation()
     assert not readiness.is_decision_ready
     assert readiness.requires_escalation
     assert "different payer" in " ".join(readiness.active_contradictions).lower()
+
+def test_late_contradiction_reopens_decision_ready_case_for_review(client):
+    """The transition must succeed after evidence changes, not return HTTP 400."""
+    case_id = "PP-D-SNAD-3012"
+    tc = client
+    assert tc.get(f"/api/v1/disputes/{case_id}").status_code == 200
+    photo = tc.post(f"/api/v1/disputes/{case_id}/evidence", json={
+        "action_id": "act_buyer_condition_photo", "submitter_role": "BUYER",
+        "file_data_base64": _image(), "file_name": "condition.png", "mime_type": "image/png",
+    })
+    assert photo.status_code == 200, photo.text
+    listing = tc.post(f"/api/v1/disputes/{case_id}/evidence", json={
+        "action_id": "act_merchant_listing", "submitter_role": "MERCHANT",
+        "file_data_base64": base64.b64encode(b"%PDF-1.4\n%%EOF").decode(),
+        "file_name": "listing.pdf", "mime_type": "application/pdf",
+    })
+    assert listing.status_code == 200, listing.text
+    assert listing.json()["new_state"] == "DECISION_READY"
+
+    # A reconciliation service has now identified a contradiction between
+    # the actual submitted evidence nodes; this is not fabricated by the API.
+    with SessionLocal() as db:
+        case = db.query(DisputeCaseDB).filter_by(dispute_id=case_id).one()
+        graph = json.loads(case.graph_json)
+        ids = {
+            n["content"].get("kind"): n["id"]
+            for n in graph["nodes"] if n["type"] == "EVIDENCE_ITEM"
+        }
+        assert "condition_photo" in ids and "merchant_listing" in ids
+        graph["edges"].append({
+            "id": "late_conflict", "source_id": ids["condition_photo"],
+            "target_id": ids["merchant_listing"], "type": "CONTRADICTS",
+            "weight": 1.0,
+            "provenance": "Buyer photo condition differs from the original listing",
+        })
+        case.graph_json = json.dumps(graph)
+        db.commit()
+
+    # Existing evidence intake reevaluates graph and must reopen review.
+    new_submission = tc.post(f"/api/v1/disputes/{case_id}/evidence", json={
+        "submitter_role": "BUYER", "notes": "Request review of conflicting listing",
+    })
+    assert new_submission.status_code == 200, new_submission.text
+    assert new_submission.json()["previous_state"] == "DECISION_READY"
+    assert new_submission.json()["new_state"] == "REVIEW_REQUIRED"
+    detail = tc.get(f"/api/v1/disputes/{case_id}").json()
+    assert detail["state"] == "REVIEW_REQUIRED"
+    assert not detail["readiness"]["is_decision_ready"]
+    assert "late_conflict" not in " ".join(detail["readiness"]["active_contradictions"]) or detail["readiness"]["active_contradictions"]
+    assert detail["current_policy_decision"]["chosen_action"]["action_id"] == "act_resolve_contradiction"
