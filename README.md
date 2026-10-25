@@ -11,6 +11,26 @@
 
 ---
 
+## Real AI integration — explicit, optional, and unverified
+
+ProofGraph has **two different layers**: deterministic evidence graph / next-evidence policies, and an optional **real OpenAI `gpt-4o-mini` claim extractor** introduced for Issue #18. The backend calls OpenAI's Chat Completions API with strict JSON Schema when an operator sets `AI_PROVIDER=openai` and `OPENAI_API_KEY`, and a reviewer explicitly clicks **Analyze dispute text with AI**. The model proposes quote-grounded assertions and possible evidence questions; each artifact is marked `MODEL_INFERENCE / UNVERIFIED`. It cannot verify facts, change readiness, or decide a dispute. Without configuration it explicitly falls back to deterministic policy, never fake model output.
+
+The deterministic next-action scores described elsewhere in this README are **hand-configured heuristics**, not calibrated probabilities or measured information gain. Image hash/magic-byte checks do **not** authenticate document content. Benchmark percentages are from hand-written synthetic scenarios, **not** real-world dispute accuracy.
+
+**To verify an actual model call**, run the credential-gated live smoke test (default CI mocks the provider and skips the live call):
+
+```bash
+export AI_PROVIDER=openai
+export OPENAI_MODEL=gpt-4o-mini
+export OPENAI_API_KEY="YOUR_REAL_KEY"   # Secret; never commit this
+export RUN_LIVE_AI_TEST=1
+pytest -v apps/api/tests/test_ai_claim_extractor.py::test_optional_live_openai_claim_extraction
+```
+
+See [Issue #18 implementation, safety limits, fallback, and live verification](docs/issue18-real-ai-extraction.md).
+
+---
+
 ## 1. Product Vision & Architecture
 
 Payment disputes frequently devolve into cumbersome, asynchronous document dumps between buyers, merchants, and PayPal adjudicators. Existing dispute automation tools (e.g. Chargeflow) treat disputes as passive PDF templating exercises.
