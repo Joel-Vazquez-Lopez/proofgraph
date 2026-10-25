@@ -292,7 +292,7 @@ export default function ProofGraphPage() {
           {/* ── Left Column: Case List (4 cols) ── */}
           <section aria-label="Dispute cases" className="lg:col-span-4 lg:sticky lg:top-[72px]">
             {loadingList && disputes.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-8 flex flex-col items-center gap-3 text-slate-500">
+              <div role="status" aria-live="polite" className="bg-white rounded-2xl border border-slate-200 p-8 flex flex-col items-center gap-3 text-slate-500">
                 <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
                 <span className="text-xs font-semibold">Loading cases…</span>
               </div>
@@ -312,7 +312,7 @@ export default function ProofGraphPage() {
           {/* ── Right Column: Investigation View (8 cols) ── */}
           <section className="lg:col-span-8 flex flex-col gap-5">
             {loadingDetail ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-12 flex flex-col items-center gap-3 text-slate-500">
+              <div role="status" aria-live="polite" className="bg-white rounded-2xl border border-slate-200 p-12 flex flex-col items-center gap-3 text-slate-500">
                 <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
                 <span className="text-xs font-semibold">Loading case details…</span>
               </div>
