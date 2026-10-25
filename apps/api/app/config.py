@@ -19,7 +19,7 @@ class Settings(BaseModel):
     # AI Engine Configuration
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    AI_PROVIDER: str = os.getenv("AI_PROVIDER", "openai")  # "openai" or "disabled"
+    AI_PROVIDER: str = os.getenv("AI_PROVIDER", "disabled")  # "openai" or "disabled"
     OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
     AI_TIMEOUT_SECONDS: float = 8.0  # Fixed small external-call budget
     NBE_POLICY_TYPE: str = os.getenv("NBE_POLICY_TYPE", "heuristic")  # "heuristic" (default) or "discriminative"
