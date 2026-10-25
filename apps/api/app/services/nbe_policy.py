@@ -50,27 +50,6 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
 
-        # 1. Check for Active Contradictions first (highest priority)
-        contradictions = graph.get_contradictions()
-        if contradictions:
-            src, tgt, edge = contradictions[0]
-            action = CandidateAction(
-                action_id="act_resolve_contradiction",
-                action_type=ActionType.REQUEST_BUYER_CLARIFICATION,
-                title=f"Resolve Discrepancy: {src.label} vs {tgt.label}",
-                description=(
-                    f"A factual discrepancy was identified between {src.label} and {tgt.label}. "
-                    "Request targeted clarification regarding destination address or receipt confirmation."
-                ),
-                target_party="BUYER",
-                expected_information_gain=0.98,
-                acquisition_friction=0.2,
-                utility_score=0.95,
-                rationale="Factual contradiction directly blocks decision-readiness. Resolving it has primary utility.",
-                required_inputs=["clarification_statement", "supporting_address_document"]
-            )
-            candidates.append(action)
-
         # Collect already attempted action IDs to prevent infinite loops
         attempted_actions = set()
         for q in graph.get_nodes_by_type(NodeType.QUESTION):
@@ -80,7 +59,7 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
             elif q.id.startswith("q_"):
                 attempted_actions.add(q.id[2:])
 
-        # 1. Scenario D — Check for Active Critical Contradictions first (highest priority)
+        # Prioritize unresolved critical contradictions once, after checking attempted actions.
         contradictions = graph.get_contradictions()
         critical_contradictions = [
             (src, tgt, edge) for src, tgt, edge in contradictions
@@ -335,8 +314,9 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
 
         rationale = (
             f"Selected action '{chosen.title}' with highest net utility score ({chosen.utility_score:.2f}) "
-            f"balancing high information gain ({chosen.expected_information_gain:.2f}) "
-            f"and minimal friction ({chosen.acquisition_friction:.2f})."
+            f"using an uncalibrated information-gain proxy ({chosen.expected_information_gain:.2f}) "
+            f"and an assigned friction value ({chosen.acquisition_friction:.2f}); "
+            "these scores are heuristic, not probabilities."
             if chosen else "No actionable candidates identified."
         )
 

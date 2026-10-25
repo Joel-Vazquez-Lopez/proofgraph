@@ -215,7 +215,7 @@ export default function ProofGraphPage() {
         const result = await res.json();
         setFeedback({
           type: "success",
-          message: `Tracking submitted and carrier delivery verified. Case moved to: ${result.new_state}.`,
+          message: `Tracking submitted. Carrier verification status must be checked in the case evidence. Case state: ${result.new_state}.`,
         });
         await fetchDisputeDetail(dispute.dispute_id);
         await fetchDisputes();
@@ -247,7 +247,7 @@ export default function ProofGraphPage() {
         const result = await res.json();
         setFeedback({
           type: "success",
-          message: `Document verified and added to case. State: ${result.new_state}.`,
+          message: `Document uploaded and added to case. Authenticity has not been independently verified. Case state: ${result.new_state}.`,
         });
         await fetchDisputeDetail(dispute.dispute_id);
         await fetchDisputes();

@@ -26,6 +26,9 @@ def submit_evidence(
     service = DisputeService(db)
     try:
         return service.process_evidence_submission(dispute_id, submission)
+    except HTTPException:
+        # Preserve validator status codes, in particular 413 for oversized files.
+        raise
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -65,6 +68,9 @@ async def upload_evidence_file(
 
     try:
         return service.process_evidence_submission(dispute_id, submission)
+    except HTTPException:
+        # Preserve validator status codes, in particular 413 for oversized files.
+        raise
     except KeyError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
