@@ -53,3 +53,39 @@ jobs:
       - name: Build Next.js application
         working-directory: apps/web
         run: npm run build
+
+  frontend-browser:
+    name: Merchant Browser Journey (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Install Playwright test runner
+        working-directory: apps/web
+        run: npm install --no-save --package-lock=false @playwright/test@1.56.1
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run desktop, mobile, keyboard and error-state browser journeys
+        working-directory: apps/web
+        env:
+          CI: "true"
+        run: npx playwright test --config=playwright.config.cjs
+
+      - name: Upload browser traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchant-browser-traces
+          path: apps/web/test-results/
+          retention-days: 7
