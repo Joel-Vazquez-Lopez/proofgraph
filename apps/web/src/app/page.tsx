@@ -9,7 +9,7 @@ import { CaseOverview } from "@/components/CaseOverview";
 import { ReviewPackageModal } from "@/components/ReviewPackageModal";
 import { AdvancedWorkspace } from "@/components/AdvancedWorkspace";
 import { GraphNodeData } from "@/components/EvidenceGraphView";
-import { getResponseError, isCurrentCase, submissionMessage } from "@/lib/investigation-actions.mjs";
+import { friendlyRequestError, getResponseError, isCurrentCase, submissionMessage } from "@/lib/investigation-actions.mjs";
 
 // ─────────────────────────────────────────────
 // Types aligned with the backend API contracts
@@ -131,7 +131,7 @@ export default function ProofGraphPage() {
       }
     } catch (err: any) {
       if (request === listRequestRef.current) {
-        setListError(err?.message || "Could not load cases.");
+        setListError(friendlyRequestError(err, "Could not load cases"));
       }
     } finally {
       if (request === listRequestRef.current) setLoadingList(false);
@@ -158,7 +158,7 @@ export default function ProofGraphPage() {
       }
     } catch (err: any) {
       if (!controller.signal.aborted && isCurrentCase(id, activeCaseRef.current, request, detailRequestRef.current)) {
-        setDetailError(err?.message || "Could not load this investigation.");
+        setDetailError(friendlyRequestError(err, "Could not load case details"));
       }
     } finally {
       if (isCurrentCase(id, activeCaseRef.current, request, detailRequestRef.current)) {
