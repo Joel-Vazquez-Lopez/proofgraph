@@ -1,5 +1,6 @@
 import json
 import base64
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -33,6 +34,20 @@ from app.adapters.paypal_sandbox import PayPalSandboxAdapter
 
 
 class DisputeService:
+    @staticmethod
+    def _tracking_identity(carrier_name: str, tracking_number: str) -> str:
+        """Stable, privacy-preserving identity using the *full* carrier/tracking pair."""
+        normalized = f"{carrier_name.strip().casefold()}\x1f{tracking_number.strip().upper()}"
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+
+    @staticmethod
+    def _new_shipment_id(graph: EvidenceGraph, identity: str) -> str:
+        """Never replace a different node, even in the event of a digest collision."""
+        candidate = f"ship_{identity}"
+        while graph.get_node(candidate) is not None:
+            candidate = f"ship_{identity}_{uuid.uuid4().hex[:10]}"
+        return candidate
+
     def __init__(self, db: Session):
         self.db = db
         self.synthetic_adapter = SyntheticDisputeAdapter()
@@ -172,10 +187,18 @@ class DisputeService:
             tracking_clean = submission.tracking_number.strip()
             carrier_clean = submission.carrier_name.strip()
             
-            # 1. Add/Update SHIPMENT node with origin USER_SUBMITTED and status UNVERIFIED
-            ship_node_id = f"ship_{carrier_clean.lower()}_{tracking_clean[-4:]}"
-            existing_ship = graph.get_node(ship_node_id)
+            # 1. Reuse an exact carrier/tracking match, including old graph IDs.
+            # Never equate shipments merely because their tracking suffix matches.
+            identity = self._tracking_identity(carrier_clean, tracking_clean)
+            existing_ship = next((
+                node for node in graph.get_nodes_by_type(NodeType.SHIPMENT)
+                if self._tracking_identity(
+                    str(node.content.get("carrier_name", "")),
+                    str(node.content.get("tracking_number", "")),
+                ) == identity
+            ), None)
             if not existing_ship:
+                ship_node_id = self._new_shipment_id(graph, identity)
                 ship_node = graph.add_node(
                     node_type=NodeType.SHIPMENT,
                     label=f"Submitted Shipment: {carrier_clean} #{tracking_clean}",
@@ -296,7 +319,12 @@ class DisputeService:
             case_data_source=case_data_source
         )
 
-        obs_id = f"obs_carrier_{tracking_number[-4:]}"
+        # Each lookup is a distinct observation event. Do not overwrite a prior
+        # record (including historical obs_carrier_<last4> nodes) on retries.
+        identity = self._tracking_identity(carrier_name, tracking_number)
+        obs_id = f"obs_carrier_{identity}_{uuid.uuid4().hex[:10]}"
+        while graph.get_node(obs_id) is not None:
+            obs_id = f"obs_carrier_{identity}_{uuid.uuid4().hex[:10]}"
         is_verified = result.status in ("DELIVERED", "IN_TRANSIT", "EXCEPTION")
         
         obs_node = graph.add_node(
