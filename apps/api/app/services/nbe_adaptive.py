@@ -200,6 +200,10 @@ class HypothesisDiscriminationPolicy(NextBestEvidencePolicy):
         review = assess_inr_hypotheses(graph)
         needs = _derive_needs(graph, review)
         attempted = _attempted(graph)
+        unavailable = sorted(
+            cap.action_id for cap in _CAPABILITIES
+            if not self.availability.get(cap.action_id, True)
+        )
         candidates = []
         for cap in _CAPABILITIES:
             matching = tuple(need for need in needs if need.key in cap.discriminates)
@@ -229,6 +233,7 @@ class HypothesisDiscriminationPolicy(NextBestEvidencePolicy):
                     f"Competing hypotheses: {', '.join(hypotheses)}. "
                     f"Evidence IDs: {', '.join(evidence_ids) or 'none'}. "
                     f"Evidence basis: {review.evidence_basis}. "
+                    f"Unavailable action IDs: {', '.join(unavailable) or 'none'}. "
                     f"Ordinal ambiguity coverage {coverage}/(1+friction {friction:g})={score:g}; "
                     "not an information-gain estimate or proof of receipt."
                 ),
