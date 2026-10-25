@@ -38,7 +38,7 @@ def extract_dispute_claims(
             "action": "Quote-grounded model claim extraction (unverified)",
             "state_transition": f"{case.state} -> {case.state}",
             "notes": (
-                f"OpenAI model {result.model}; extracted {len(result.claims)} unverified "
+                f"{result.provider.upper()} model {result.model}; extracted {len(result.claims)} unverified "
                 f"assertion(s), rejected {result.rejected_items}; no adjudication or policy change."
             ),
         })

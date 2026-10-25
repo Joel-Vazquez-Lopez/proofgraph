@@ -11,23 +11,24 @@
 
 ---
 
-## Real AI integration — explicit, optional, and unverified
+## Generative AI claim extraction — Gemini primary, OpenAI optional
 
-ProofGraph has **two different layers**: deterministic evidence graph / next-evidence policies, and an optional **real OpenAI `gpt-4o-mini` claim extractor** introduced for Issue #18. The backend calls OpenAI's Chat Completions API with strict JSON Schema when an operator sets `AI_PROVIDER=openai` and `OPENAI_API_KEY`, and a reviewer explicitly clicks **Analyze dispute text with AI**. The model proposes quote-grounded assertions and possible evidence questions; each artifact is marked `MODEL_INFERENCE / UNVERIFIED`. It cannot verify facts, change readiness, or decide a dispute. Without configuration it explicitly falls back to deterministic policy, never fake model output.
+A reviewer can explicitly click **Analyze dispute text with AI** to request quote-grounded candidate assertions. **Gemini `gemini-3.5-flash-lite`** is the default backend provider and supports the Google AI Studio free API tier (subject to project quotas); **OpenAI `gpt-4o-mini`** is an optional alternative. Neither provider controls PayPal, verifies evidence, or changes dispute readiness. The deterministic investigation policy remains authoritative.
 
-The deterministic next-action scores described elsewhere in this README are **hand-configured heuristics**, not calibrated probabilities or measured information gain. Image hash/magic-byte checks do **not** authenticate document content. Benchmark percentages are from hand-written synthetic scenarios, **not** real-world dispute accuracy.
+The backend sends only bounded source claim statements and strictly validates exact quoted substrings, source IDs and typed evidence requests. Accepted graph nodes are `MODEL_INFERENCE / UNVERIFIED`. Without valid provider credentials, the API explicitly returns `FALLBACK_NOT_CONFIGURED` and the existing deterministic action; no synthetic output is presented as live AI.
 
-**To verify an actual model call**, run the credential-gated live smoke test (default CI mocks the provider and skips the live call):
+For local Gemini setup, configure `GEMINI_API_KEY` **server-side only** (in an ignored `.env` file or exported environment variable) and run:
 
 ```bash
-export AI_PROVIDER=openai
-export OPENAI_MODEL=gpt-4o-mini
-export OPENAI_API_KEY="YOUR_REAL_KEY"   # Secret; never commit this
-export RUN_LIVE_AI_TEST=1
-pytest -v apps/api/tests/test_ai_claim_extractor.py::test_optional_live_openai_claim_extraction
+export AI_PROVIDER=gemini
+export GEMINI_MODEL=gemini-3.5-flash-lite
+export RUN_LIVE_GEMINI_TEST=1
+pytest -v apps/api/tests/test_gemini_claim_extractor.py::test_optional_live_gemini_claim_extraction
 ```
 
-See [Issue #18 implementation, safety limits, fallback, and live verification](docs/issue18-real-ai-extraction.md).
+The smoke test requires `GEMINI_API_KEY` to be set locally, sends **synthetic dispute text only**, and is skipped in ordinary CI. To use OpenAI instead, set `AI_PROVIDER=openai` with the server-side `OPENAI_API_KEY`.
+
+See [full Gemini/OpenAI configuration, privacy constraints, and test commands](docs/issue18-real-ai-extraction.md). Policy scores are heuristic, **not calibrated likelihoods**; simulated carrier telemetry is **not independent verification**.
 
 ---
 

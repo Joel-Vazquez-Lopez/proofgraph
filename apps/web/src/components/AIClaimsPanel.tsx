@@ -59,8 +59,8 @@ export function AIClaimsPanel({ disputeId }: { disputeId: string }) {
         <div>
           <h3 className="text-sm font-bold text-slate-900">Optional AI claim extraction</h3>
           <p className="text-xs text-slate-600 mt-1">
-            Identify exact statements in the dispute text and possible evidence questions.
-            Not a verification, refund decision, or replacement for the evidence graph.
+            Extract exact statements and possible evidence questions using server-configured
+            Gemini (default) or OpenAI. No output verifies evidence or changes dispute decisions.
           </p>
         </div>
         <button type="button" onClick={analyze} disabled={busy}
@@ -74,8 +74,10 @@ export function AIClaimsPanel({ disputeId }: { disputeId: string }) {
         <div aria-live="polite" className="border-t border-slate-100 pt-3 space-y-3 text-xs">
           <p className="font-semibold text-slate-800">
             {result.model_called
-              ? `Provider: ${result.provider} · Model: ${result.model ?? "unknown"} · Status: ${result.status}`
-              : `No model call · ${result.status}`}
+              ? (result.status.startsWith("MODEL_")
+                ? `Provider: ${result.provider} · Model: ${result.model ?? "unknown"} · Status: ${result.status}`
+                : `Attempted provider: ${result.provider} · Model: ${result.model ?? "unknown"} · No accepted model output · ${result.status}`)
+              : `No model call · ${result.status} · Configured provider: ${result.provider}`}
           </p>
           <p className="text-slate-600">{result.message}</p>
           <p className="font-medium text-amber-800">
