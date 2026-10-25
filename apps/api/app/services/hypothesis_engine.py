@@ -39,6 +39,19 @@ _HYPOTHESES = (
 )
 
 
+_RECEIPT_ASSESSMENTS = (
+    # These physical-world explanations cannot be distinguished solely from
+    # carrier destination reports. Never turn scan support into receipt proof.
+    HypothesisAssessment(
+        "buyer_physically_received_item", "UNRESOLVED",
+        explanation="A carrier scan or postal-code match does not prove actual buyer possession.",
+    ),
+    HypothesisAssessment(
+        "nonreceipt_due_to_loss_or_misdelivery", "UNRESOLVED",
+        explanation="No independently corroborated chain of custody distinguishes loss, theft, or misdelivery.",
+    ),
+)
+
 def _assessment(name: str, supporting: Tuple[str, ...], opposing: Tuple[str, ...]) -> HypothesisAssessment:
     if supporting and opposing:
         state = "CONFLICTED"
@@ -66,7 +79,7 @@ def assess_inr_hypotheses(graph: EvidenceGraph) -> HypothesisReview:
     orders = graph.get_nodes_by_type(NodeType.ORDER)
     if len(shipments) != 1 or len(orders) != 1:
         return HypothesisReview(
-            tuple(_assessment(h, (), ()) for h in _HYPOTHESES),
+            tuple(_assessment(h, (), ()) for h in _HYPOTHESES) + _RECEIPT_ASSESSMENTS,
             "NONE", None,
             "ABSTAIN: exactly one order and one shipment are required to associate carrier reports safely.",
         )
@@ -112,6 +125,7 @@ def assess_inr_hypotheses(graph: EvidenceGraph) -> HypothesisReview:
         _assessment(_HYPOTHESES[0], tuple(matching), tuple(different)),
         _assessment(_HYPOTHESES[1], tuple(different), tuple(matching)),
         _assessment(_HYPOTHESES[2], tuple(transit), tuple(delivered)),
+        *_RECEIPT_ASSESSMENTS,
     )
     if any(a.status == "CONFLICTED" for a in result) or (transit and delivered):
         next_action = "act_resolve_contradiction"

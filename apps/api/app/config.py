@@ -19,7 +19,7 @@ class Settings(BaseModel):
     # AI Engine Configuration
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    NBE_POLICY_TYPE: str = os.getenv("NBE_POLICY_TYPE", "heuristic")  # "heuristic" or "llm"
+    NBE_POLICY_TYPE: str = os.getenv("NBE_POLICY_TYPE", "heuristic")  # "heuristic" (default) or "discriminative"
     
     # Security & Storage
     MAX_UPLOAD_SIZE_MB: int = 10
