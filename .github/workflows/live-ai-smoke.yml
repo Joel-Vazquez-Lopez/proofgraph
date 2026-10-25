@@ -1,0 +1,59 @@
+name: Live AI Claim Extraction (manual, real provider)
+
+on:
+  workflow_dispatch:
+    inputs:
+      provider:
+        description: 'Real API provider; requires the corresponding repository secret'
+        required: true
+        type: choice
+        default: gemini
+        options:
+          - gemini
+          - openai
+
+jobs:
+  live-model-smoke:
+    name: Genuine provider model smoke test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+      - name: Install backend requirements
+        run: python -m pip install -r apps/api/requirements.txt
+      - name: Require Gemini secret (no mock fallback)
+        if: ${{ inputs.provider == 'gemini' }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          if [ -z "$GEMINI_API_KEY" ]; then
+            echo 'Gemini secret is not configured; live inference NOT tested.'
+            exit 1
+          fi
+      - name: Real Gemini synthetic-dispute smoke
+        if: ${{ inputs.provider == 'gemini' }}
+        env:
+          AI_PROVIDER: gemini
+          GEMINI_MODEL: gemini-3.5-flash-lite
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          RUN_LIVE_GEMINI_TEST: '1'
+        run: pytest -v apps/api/tests/test_gemini_claim_extractor.py::test_optional_live_gemini_claim_extraction
+      - name: Require OpenAI secret (no mock fallback)
+        if: ${{ inputs.provider == 'openai' }}
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo 'OpenAI secret is not configured; live inference NOT tested.'
+            exit 1
+          fi
+      - name: Real OpenAI synthetic-dispute smoke
+        if: ${{ inputs.provider == 'openai' }}
+        env:
+          AI_PROVIDER: openai
+          OPENAI_MODEL: gpt-4o-mini
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          RUN_LIVE_AI_TEST: '1'
+        run: pytest -v apps/api/tests/test_ai_claim_extractor.py::test_optional_live_openai_claim_extraction

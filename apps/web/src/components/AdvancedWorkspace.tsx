@@ -282,9 +282,11 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
                 </span>
                 <div className="mt-3 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-600">Expected info gain:</span>
+                    <span className="text-slate-600">Information gain:</span>
                     <span className="font-mono font-bold text-indigo-700">
-                      {(policy?.chosen_action?.expected_information_gain ?? 0).toFixed(2)}
+                      {(policy?.chosen_action?.expected_information_gain ?? 0) > 0
+                        ? (policy?.chosen_action?.expected_information_gain ?? 0).toFixed(2)
+                        : "Not estimated"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -300,7 +302,7 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-400 italic pt-1">
-                    Scores are heuristic estimates used to rank next actions. They are not calibrated probabilities.
+                    These are internal action-ranking values, not confidence scores or calibrated probabilities. "Not estimated" means information gain was not calculated.
                   </p>
                 </div>
               </div>

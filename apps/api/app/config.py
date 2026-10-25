@@ -1,5 +1,15 @@
 import os
+from pathlib import Path
+
+from dotenv import load_dotenv
 from pydantic import BaseModel
+
+# Both the running FastAPI backend and the Sandbox smoke command read the
+# same local credentials. Explicit process environment variables take precedence.
+# Neither file is tracked by Git (see .gitignore).
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+load_dotenv(_REPO_ROOT / ".env", override=False)
+load_dotenv(Path(__file__).resolve().parents[1] / ".env", override=False)
 
 
 class Settings(BaseModel):
@@ -19,7 +29,11 @@ class Settings(BaseModel):
     # AI Engine Configuration
     GEMINI_API_KEY: str = os.getenv("GEMINI_API_KEY", "")
     OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
-    NBE_POLICY_TYPE: str = os.getenv("NBE_POLICY_TYPE", "heuristic")  # "heuristic" or "llm"
+    AI_PROVIDER: str = os.getenv("AI_PROVIDER", "gemini")  # gemini default; openai optional; disabled
+    GEMINI_MODEL: str = os.getenv("GEMINI_MODEL", "gemini-3.5-flash-lite")
+    OPENAI_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    AI_TIMEOUT_SECONDS: float = 8.0  # Fixed small external-call budget
+    NBE_POLICY_TYPE: str = os.getenv("NBE_POLICY_TYPE", "heuristic")  # "heuristic" (default) or "discriminative"
     
     # Security & Storage
     MAX_UPLOAD_SIZE_MB: int = 10

@@ -1,5 +1,6 @@
 import json
 import base64
+import hashlib
 import uuid
 from datetime import datetime, timezone
 from typing import List, Dict, Any, Optional
@@ -7,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from packages.shared_schemas.models import (
     DisputeCategory,
+    ActionType,
     InvestigationState,
     DataSourceType,
     NodeType,
@@ -26,18 +28,74 @@ from app.services.state_machine import InvestigationStateMachine
 from app.services.evidence_graph import EvidenceGraph
 from app.services.evaluator import DecisionReadinessEvaluator
 from app.services.nbe_policy import HeuristicNBEPolicy
+from app.services.nbe_adaptive import HypothesisDiscriminationPolicy
+from app.config import settings
 from app.services.image_integrity import EvidenceIntegrityAnalyzer
+from app.security.file_validator import validate_and_decode_base64_upload
 from app.services.carrier_service import CarrierVerificationService, CarrierVerificationResult
 from app.adapters.synthetic import SyntheticDisputeAdapter
 from app.adapters.paypal_sandbox import PayPalSandboxAdapter
 
 
 class DisputeService:
+    @staticmethod
+    def _tracking_identity(carrier_name: str, tracking_number: str) -> str:
+        """Stable, privacy-preserving identity using the full carrier/tracking pair."""
+        normalized = f"{carrier_name.strip().casefold()}\x1f{tracking_number.strip().upper()}"
+        return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:20]
+
+    @staticmethod
+    def _new_shipment_id(graph: EvidenceGraph, identity: str) -> str:
+        """Never replace a different node, even in the event of a digest collision."""
+        candidate = f"ship_{identity}"
+        while graph.get_node(candidate) is not None:
+            candidate = f"ship_{identity}_{uuid.uuid4().hex[:10]}"
+        return candidate
+
     def __init__(self, db: Session):
         self.db = db
         self.synthetic_adapter = SyntheticDisputeAdapter()
         self.paypal_adapter = PayPalSandboxAdapter()
         self.nbe_policy = HeuristicNBEPolicy()
+
+    def _investigation_policy(self, category, graph, readiness, data_source):
+        """Select the opt-in policy without changing existing API/state contracts.
+
+        No independent live carrier gateway is configured in current Backend.
+        Synthetic carrier lookup is available only for synthetic demo cases.
+        """
+        if settings.NBE_POLICY_TYPE == "discriminative":
+            policy = HypothesisDiscriminationPolicy(availability={
+                "act_carrier_lookup": data_source == DataSourceType.SYNTHETIC_FIXTURE,
+            })
+            return policy.evaluate_candidates(category, graph, readiness)
+        return HeuristicNBEPolicy(
+            carrier_lookup_available=data_source == DataSourceType.SYNTHETIC_FIXTURE
+        ).evaluate_candidates(category, graph, readiness)
+
+    @staticmethod
+    def _record_discriminative_question(graph: EvidenceGraph, decision: PolicyDecision) -> None:
+        """Persist an offered action, without implying successful execution."""
+        if settings.NBE_POLICY_TYPE != "discriminative":
+            return
+        action = decision.chosen_action
+        if not action or action.action_type == ActionType.ESCALATE_HUMAN_REVIEW:
+            return
+        already = any(
+            isinstance(q.content.get("action"), dict)
+            and q.content["action"].get("action_id") == action.action_id
+            for q in graph.get_nodes_by_type(NodeType.QUESTION)
+        )
+        if not already:
+            graph.add_node(
+                node_type=NodeType.QUESTION,
+                label=action.title,
+                content={"action": action.model_dump(), "action_status": "RECOMMENDED"},
+                source="INVESTIGATION_ENGINE",
+                node_id=f"q_{action.action_id}",
+                origin=EvidenceOrigin.MODEL_INFERENCE,
+                verification_status=EvidenceVerificationStatus.UNVERIFIED,
+            )
 
     def list_disputes(self) -> List[DisputeSummary]:
         self._ensure_seed_scenarios()
@@ -126,7 +184,8 @@ class DisputeService:
         if not case:
             raise KeyError(f"Dispute {dispute_id} not found.")
 
-        current_state = InvestigationState(case.state)
+        previous_state = InvestigationState(case.state)
+        current_state = previous_state
         # Transition to INVESTIGATING if currently AWAITING_EVIDENCE
         if current_state == InvestigationState.AWAITING_EVIDENCE:
             current_state = InvestigationStateMachine.transition(current_state, InvestigationState.INVESTIGATING)
@@ -136,33 +195,58 @@ class DisputeService:
         nodes_created: List[str] = []
         edges_created: List[str] = []
         integrity_finding: Optional[EvidenceIntegrityFinding] = None
+        carrier_outcome_note = ""
 
         evidence_item_id = f"ev_{uuid.uuid4().hex[:8]}"
 
-        # Handle file upload if present
-        if submission.file_data_base64 and submission.file_name:
-            file_bytes = base64.b64decode(submission.file_data_base64)
-            mime = submission.mime_type or "application/octet-stream"
+        # JSON and multipart ingestion share the same decoded byte-size limit,
+        # extension, detected signature, and declared MIME checks.
+        if any(value is not None for value in (
+            submission.file_data_base64, submission.file_name, submission.mime_type
+        )):
+            if not all(value is not None for value in (
+                submission.file_data_base64, submission.file_name, submission.mime_type
+            )):
+                raise ValueError("file_data_base64, file_name and mime_type must be provided together.")
+            file_bytes, mime, safe_name = validate_and_decode_base64_upload(
+                submission.file_data_base64, submission.file_name, submission.mime_type
+            )
             integrity_finding = EvidenceIntegrityAnalyzer.analyze_image_bytes(
                 file_bytes=file_bytes,
-                file_name=submission.file_name,
+                file_name=safe_name,
                 mime_type=mime,
                 file_id=evidence_item_id
             )
             # Add EVIDENCE_ITEM node
             ev_node = graph.add_node(
                 node_type=NodeType.EVIDENCE_ITEM,
-                label=f"Uploaded File: {submission.file_name}",
+                label=f"Uploaded File: {safe_name}",
                 content={
-                    "file_name": submission.file_name,
+                    "file_name": safe_name,
                     "mime_type": mime,
                     "sha256": integrity_finding.sha256_hash,
                     "status": integrity_finding.integrity_status.value,
+                    "action_id": submission.action_id,
+                    # A submitted listing is evidence for comparison, NOT proof
+                    # the listed claims or the uploaded document are authentic.
+                    "kind": (
+                        "merchant_listing"
+                        if submission.action_id == "act_merchant_listing"
+                        and submission.submitter_role.upper() == "MERCHANT"
+                        else "condition_photo"
+                        if submission.action_id == "act_buyer_condition_photo"
+                        and submission.submitter_role.upper() == "BUYER"
+                        and mime.startswith("image/")
+                        else "submitted_file"
+                    ),
                 },
                 source=f"{submission.submitter_role}_UPLOAD",
                 node_id=evidence_item_id,
                 origin=EvidenceOrigin.USER_SUBMITTED,
-                verification_status=EvidenceVerificationStatus.VERIFIED,
+                # SHA-256 and metadata checks establish a local integrity finding,
+                # not the authenticity or factual accuracy of submitted evidence.
+                # Only a separate, auditable corroboration can verify this node.
+                verification_status=EvidenceVerificationStatus.UNVERIFIED,
                 metadata={"integrity": integrity_finding.model_dump()}
             )
             nodes_created.append(ev_node.id)
@@ -172,10 +256,18 @@ class DisputeService:
             tracking_clean = submission.tracking_number.strip()
             carrier_clean = submission.carrier_name.strip()
             
-            # 1. Add/Update SHIPMENT node with origin USER_SUBMITTED and status UNVERIFIED
-            ship_node_id = f"ship_{carrier_clean.lower()}_{tracking_clean[-4:]}"
-            existing_ship = graph.get_node(ship_node_id)
+            # 1. Reuse an exact carrier/tracking match, including old graph IDs.
+            # Never equate shipments merely because their tracking suffix matches.
+            identity = self._tracking_identity(carrier_clean, tracking_clean)
+            existing_ship = next((
+                node for node in graph.get_nodes_by_type(NodeType.SHIPMENT)
+                if self._tracking_identity(
+                    str(node.content.get("carrier_name", "")),
+                    str(node.content.get("tracking_number", "")),
+                ) == identity
+            ), None)
             if not existing_ship:
+                ship_node_id = self._new_shipment_id(graph, identity)
                 ship_node = graph.add_node(
                     node_type=NodeType.SHIPMENT,
                     label=f"Submitted Shipment: {carrier_clean} #{tracking_clean}",
@@ -197,9 +289,12 @@ class DisputeService:
             else:
                 ship_node = existing_ship
 
-            # Close open question asking for merchant tracking
+            # A submitted tracking identifier satisfies only the merchant tracking
+            # request. It cannot answer an outstanding carrier lookup question.
             for q in graph.get_open_questions():
-                if "tracking" in q.label.lower() or "act_merchant_tracking" in q.id:
+                action = q.content.get("action") or {}
+                requested_action = action.get("action_id", "") if isinstance(action, dict) else ""
+                if requested_action == "act_merchant_tracking" or q.id == "q_act_merchant_tracking":
                     edge_ans = graph.add_edge(
                         source_id=ship_node.id,
                         target_id=q.id,
@@ -212,7 +307,7 @@ class DisputeService:
             # A tracking number alone NEVER establishes delivery.
             # Carrier verification occurs ONLY if explicitly requested or authorized.
             if submission.verify_carrier_now or submission.action_id == "act_carrier_lookup":
-                carrier_nodes, carrier_edges = self._perform_carrier_verification_internal(
+                carrier_nodes, carrier_edges, carrier_result = self._perform_carrier_verification_internal(
                     graph=graph,
                     ship_node=ship_node,
                     carrier_name=carrier_clean,
@@ -221,18 +316,31 @@ class DisputeService:
                 )
                 nodes_created.extend(carrier_nodes)
                 edges_created.extend(carrier_edges)
+                carrier_outcome_note = self._carrier_outcome_message(carrier_result)
 
-        # Close any open question nodes answered by this submission
-        open_questions = graph.get_open_questions()
-        for q in open_questions:
-            if nodes_created:
-                edge_ans = graph.add_edge(
-                    source_id=nodes_created[0],
-                    target_id=q.id,
-                    edge_type=EdgeType.ANSWERS,
-                    provenance=f"Submitted evidence directly addresses question: {q.label}"
-                )
-                edges_created.append(edge_ans.id)
+        # A document cannot answer every open question merely because it was
+        # uploaded. Only link the specifically requested action, and do not
+        # confuse an ANSWERS edge with independent verification.
+        if integrity_finding and submission.action_id:
+            eligible = {
+                "act_buyer_condition_photo": "condition_photo",
+                "act_merchant_listing": "merchant_listing",
+                "act_request_transaction_records": "submitted_file",
+                "act_request_transaction_reconciliation": "submitted_file",
+                "act_request_carrier_receipt": "submitted_file",
+                "act_request_signature_or_proof": "submitted_file",
+            }
+            item = ev_node
+            if (item and item.type == NodeType.EVIDENCE_ITEM
+                    and item.content.get("kind") == eligible.get(submission.action_id)):
+                for q in graph.get_open_questions():
+                    action = q.content.get("action", {})
+                    if isinstance(action, dict) and action.get("action_id") == submission.action_id:
+                        edge = graph.add_edge(
+                            item.id, q.id, EdgeType.ANSWERS,
+                            "Submitted file responds to requested action; content remains unverified."
+                        )
+                        edges_created.append(edge.id)
 
         # Run Decision-Readiness Evaluator
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
@@ -241,7 +349,8 @@ class DisputeService:
         new_state = InvestigationStateMachine.transition(current_state, readiness.recommended_state)
 
         # Update NBE Policy Decision
-        policy_decision = self.nbe_policy.evaluate_candidates(DisputeCategory(case.category), graph, readiness)
+        policy_decision = self._investigation_policy(DisputeCategory(case.category), graph, readiness, DataSourceType(case.data_source))
+        self._record_discriminative_question(graph, policy_decision)
 
         # Update Timeline
         timeline = json.loads(case.timeline_json or "[]")
@@ -249,7 +358,7 @@ class DisputeService:
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "actor": submission.submitter_role,
             "action": f"Submitted evidence ({', '.join(nodes_created)})",
-            "state_transition": f"{current_state.value} -> {new_state.value}",
+            "state_transition": f"{previous_state.value} -> {new_state.value}",
             "notes": submission.notes or "Evidence processed."
         })
 
@@ -272,12 +381,26 @@ class DisputeService:
             evidence_id=evidence_item_id,
             nodes_created=nodes_created,
             edges_created=edges_created,
-            previous_state=current_state,
+            previous_state=previous_state,
             new_state=new_state,
             readiness=readiness,
             integrity_finding=integrity_finding,
-            message=f"Evidence ingested successfully. Case transitioned to {new_state.value}."
+            message=f"Evidence ingested successfully. Case transitioned to {new_state.value}. {carrier_outcome_note}".strip()
         )
+
+    @staticmethod
+    def _carrier_outcome_message(result: CarrierVerificationResult) -> str:
+        if result.verification_outcome == "SIMULATED":
+            return (
+                f"Simulated carrier fixture lookup returned {result.status}. "
+                "No independent external carrier verification occurred."
+            )
+        if result.verification_outcome == "UNAVAILABLE":
+            return (
+                "Independent carrier verification unavailable: no external carrier "
+                "gateway is configured. Tracking remains unverified."
+            )
+        return "Independent external carrier verification completed."
 
     def _perform_carrier_verification_internal(
         self,
@@ -286,7 +409,7 @@ class DisputeService:
         carrier_name: str,
         tracking_number: str,
         case_data_source: DataSourceType
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], CarrierVerificationResult]:
         nodes_created = []
         edges_created = []
 
@@ -296,19 +419,47 @@ class DisputeService:
             case_data_source=case_data_source
         )
 
-        obs_id = f"obs_carrier_{tracking_number[-4:]}"
-        is_verified = result.status in ("DELIVERED", "IN_TRANSIT", "EXCEPTION")
-        
+        # Each carrier lookup is a distinct observation event; never overwrite
+        # history, even when old graphs contain obs_carrier_<last4> nodes.
+        identity = self._tracking_identity(carrier_name, tracking_number)
+        obs_id = f"obs_carrier_{identity}_{uuid.uuid4().hex[:10]}"
+        while graph.get_node(obs_id) is not None:
+            obs_id = f"obs_carrier_{identity}_{uuid.uuid4().hex[:10]}"
+        has_status = result.status in ("DELIVERED", "IN_TRANSIT", "EXCEPTION")
+        independently_verified = (
+            has_status and result.independently_verified
+            and result.verification_outcome == "EXTERNALLY_VERIFIED"
+            and result.origin == EvidenceOrigin.VERIFIED_EXTERNAL
+            and not result.is_synthetic
+        )
+        # Compatibility boundary: a VERIFIED fixture observation currently denotes
+        # scenario-grounded truth for Agent 1's existing demo evaluator, NOT
+        # independent corroboration. Do not change readiness semantics in this PR.
+        scenario_verified = has_status and result.verification_outcome == "SIMULATED" and result.is_synthetic
+        verification_scope = (
+            "INDEPENDENT_EXTERNAL" if independently_verified else
+            "SIMULATED_FIXTURE" if result.is_synthetic else
+            "EXTERNAL_UNAVAILABLE"
+        )
+
         obs_node = graph.add_node(
             node_type=NodeType.OBSERVATION,
-            label=f"Carrier Telemetry: {result.status} ({carrier_name} #{tracking_number})",
+            label=f"{'Simulated carrier status' if result.is_synthetic else 'Carrier lookup result'}: {result.status} ({carrier_name} #{tracking_number})",
             content=result.model_dump(),
             source=result.verification_source,
             origin=result.origin,
-            verification_status=EvidenceVerificationStatus.VERIFIED if is_verified else EvidenceVerificationStatus.UNVERIFIED,
-            verified_at=datetime.now(timezone.utc).isoformat() if is_verified else None,
+            verification_status=(
+                EvidenceVerificationStatus.VERIFIED
+                if scenario_verified or independently_verified
+                else EvidenceVerificationStatus.UNVERIFIED
+            ),
+            verified_at=datetime.now(timezone.utc).isoformat() if independently_verified else None,
             node_id=obs_id,
-            metadata={"audit": result.audit_note}
+            metadata={
+                "audit": result.audit_note,
+                "verification_scope": verification_scope,
+                "independently_verified": independently_verified,
+            },
         )
         nodes_created.append(obs_node.id)
 
@@ -317,7 +468,11 @@ class DisputeService:
             source_id=obs_node.id,
             target_id=ship_node.id,
             edge_type=EdgeType.DERIVED_FROM,
-            provenance=f"Carrier telemetry scan verified via {result.verification_source}"
+            provenance=(
+                f"Simulated carrier fixture status from {result.verification_source}; not externally verified."
+                if result.is_synthetic else
+                f"Carrier lookup outcome ({result.verification_outcome}) via {result.verification_source}."
+            )
         )
         edges_created.append(edge_derived.id)
 
@@ -338,30 +493,47 @@ class DisputeService:
                         source_id=obs_node.id,
                         target_id=order_nodes[0].id,
                         edge_type=EdgeType.CONTRADICTS,
-                        provenance=f"Destination Mismatch: Carrier delivered to ZIP {delivered_zip}, but buyer order specified ZIP {dest_zip}."
+                        provenance=(
+                            f"{'SIMULATED ' if result.is_synthetic else ''}Destination Mismatch: "
+                            f"carrier status reports delivery to ZIP {delivered_zip}, "
+                            f"but order specifies ZIP {dest_zip}."
+                        )
                     )
                     edges_created.append(edge_contra.id)
             elif dest_zip and delivered_zip and dest_zip == delivered_zip:
-                # Address matched: verify the shipment node through explicit auditable event
-                graph.verify_node(
-                    node_id=ship_node.id,
-                    verifier_source=result.verification_source,
-                    origin=result.origin,
-                    audit_note=f"Carrier confirmed delivery to matching destination postal code {dest_zip}"
-                )
+                if independently_verified:
+                    # Preserve submission provenance: verification does not rewrite origin.
+                    graph.verify_node(
+                        node_id=ship_node.id,
+                        verifier_source=result.verification_source,
+                        audit_note=f"Independent carrier corroboration matched destination postal code {dest_zip}",
+                    )
+                elif result.is_synthetic:
+                    # A fixture match is informative in the demo but cannot verify
+                    # a user-submitted tracking claim against the real carrier.
+                    ship_node.metadata.setdefault("simulated_crosschecks", []).append({
+                        "observation_id": obs_node.id,
+                        "result": "MATCHING_DESTINATION_POSTAL_CODE",
+                        "external_verification": False,
+                    })
 
         # Close open question for carrier lookup if present
-        for q in graph.get_open_questions():
-            if "carrier" in q.label.lower() or "act_carrier_lookup" in q.id:
-                edge_ans = graph.add_edge(
-                    source_id=obs_node.id,
-                    target_id=q.id,
-                    edge_type=EdgeType.ANSWERS,
-                    provenance=f"Carrier query completed: status {result.status}"
-                )
-                edges_created.append(edge_ans.id)
+        if result.verification_outcome != "UNAVAILABLE":
+            for q in graph.get_open_questions():
+                if "carrier" in q.label.lower() or "act_carrier_lookup" in q.id:
+                    edge_ans = graph.add_edge(
+                        source_id=obs_node.id,
+                        target_id=q.id,
+                        edge_type=EdgeType.ANSWERS,
+                        provenance=(
+                            f"Simulated fixture lookup returned {result.status}"
+                            if result.is_synthetic else
+                            f"External carrier lookup returned {result.status}"
+                        ),
+                    )
+                    edges_created.append(edge_ans.id)
 
-        return nodes_created, edges_created
+        return nodes_created, edges_created, result
 
     def verify_carrier_shipment(self, dispute_id: str) -> EvidenceSubmissionResult:
         """
@@ -383,7 +555,7 @@ class DisputeService:
         carrier_name = primary_ship.content.get("carrier_name", "USPS")
         tracking_number = primary_ship.content.get("tracking_number", "")
 
-        nodes_created, edges_created = self._perform_carrier_verification_internal(
+        nodes_created, edges_created, carrier_result = self._perform_carrier_verification_internal(
             graph=graph,
             ship_node=primary_ship,
             carrier_name=carrier_name,
@@ -393,15 +565,22 @@ class DisputeService:
 
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
         new_state = InvestigationStateMachine.transition(current_state, readiness.recommended_state)
-        policy_decision = self.nbe_policy.evaluate_candidates(DisputeCategory(case.category), graph, readiness)
+        policy_decision = self._investigation_policy(DisputeCategory(case.category), graph, readiness, DataSourceType(case.data_source))
+        self._record_discriminative_question(graph, policy_decision)
 
         timeline = json.loads(case.timeline_json or "[]")
         timeline.append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "actor": "CARRIER_GATEWAY",
-            "action": f"Executed independent carrier verification for #{tracking_number}",
+            "actor": "SYNTHETIC_CARRIER_FIXTURE" if carrier_result.is_synthetic else "CARRIER_GATEWAY",
+            "action": (
+                f"Simulated carrier fixture lookup for #{tracking_number}"
+                if carrier_result.is_synthetic else
+                f"Carrier verification unavailable for #{tracking_number}"
+                if carrier_result.verification_outcome == "UNAVAILABLE" else
+                f"Independent carrier verification for #{tracking_number}"
+            ),
             "state_transition": f"{current_state.value} -> {new_state.value}",
-            "notes": f"Verification status recorded: {readiness.rationale}"
+            "notes": f"{self._carrier_outcome_message(carrier_result)} {readiness.rationale}"
         })
 
         case.state = new_state.value
@@ -420,7 +599,7 @@ class DisputeService:
             new_state=new_state,
             readiness=readiness,
             integrity_finding=None,
-            message=f"Independent carrier verification executed. Case state: {new_state.value}."
+            message=f"{self._carrier_outcome_message(carrier_result)} Case state: {new_state.value}."
         )
 
     def _ensure_seed_scenarios(self):
@@ -538,7 +717,8 @@ class DisputeService:
             readiness = DecisionReadinessEvaluator.evaluate(category, graph)
             
             # Evaluate NBE policy
-            policy_decision = self.nbe_policy.evaluate_candidates(category, graph, readiness)
+            policy_decision = self._investigation_policy(category, graph, readiness, DataSourceType.SYNTHETIC_FIXTURE)
+            self._record_discriminative_question(graph, policy_decision)
 
             # Initial state
             initial_state = InvestigationState.AWAITING_EVIDENCE if policy_decision.chosen_action else readiness.recommended_state
@@ -576,7 +756,10 @@ class DisputeService:
                     "actor": "SYSTEM",
                     "action": f"Intake completed for {dispute_id}",
                     "state_transition": f"CREATED -> {initial_state.value}",
-                    "notes": "Initial dispute case ingested with verified transaction and order records."
+                    "notes": (
+                        "Synthetic demonstration case initialized. Transaction and order "
+                        "records are fixture data, not independently externally verified."
+                    )
                 }]),
                 integrity_findings_json="[]",
             )

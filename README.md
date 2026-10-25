@@ -11,6 +11,27 @@
 
 ---
 
+## Generative AI claim extraction — Gemini primary, OpenAI optional
+
+A reviewer can explicitly click **Analyze dispute text with AI** to request quote-grounded candidate assertions. **Gemini `gemini-3.5-flash-lite`** is the default backend provider and supports the Google AI Studio free API tier (subject to project quotas); **OpenAI `gpt-4o-mini`** is an optional alternative. Neither provider controls PayPal, verifies evidence, or changes dispute readiness. The deterministic investigation policy remains authoritative.
+
+The backend sends only bounded source claim statements and strictly validates exact quoted substrings, source IDs and typed evidence requests. Accepted graph nodes are `MODEL_INFERENCE / UNVERIFIED`. Without valid provider credentials, the API explicitly returns `FALLBACK_NOT_CONFIGURED` and the existing deterministic action; no synthetic output is presented as live AI.
+
+For local Gemini setup, configure `GEMINI_API_KEY` **server-side only** (in an ignored `.env` file or exported environment variable) and run:
+
+```bash
+export AI_PROVIDER=gemini
+export GEMINI_MODEL=gemini-3.5-flash-lite
+export RUN_LIVE_GEMINI_TEST=1
+pytest -v apps/api/tests/test_gemini_claim_extractor.py::test_optional_live_gemini_claim_extraction
+```
+
+The smoke test requires `GEMINI_API_KEY` to be set locally, sends **synthetic dispute text only**, and is skipped in ordinary CI. To use OpenAI instead, set `AI_PROVIDER=openai` with the server-side `OPENAI_API_KEY`.
+
+See [full Gemini/OpenAI configuration, privacy constraints, and test commands](docs/issue18-real-ai-extraction.md). Policy scores are heuristic, **not calibrated likelihoods**; simulated carrier telemetry is **not independent verification**.
+
+---
+
 ## 1. Product Vision & Architecture
 
 Payment disputes frequently devolve into cumbersome, asynchronous document dumps between buyers, merchants, and PayPal adjudicators. Existing dispute automation tools (e.g. Chargeflow) treat disputes as passive PDF templating exercises.
@@ -69,6 +90,21 @@ Our implementation adheres to strict classification standards documented in [`do
 | **Provide Evidence** | `POST /v1/customer/disputes/{id}/provide-evidence` | **DOCUMENTED** (Fulfillment & tracking payloads) |
 | **Dispute Adjudication** | *Internal PayPal only* | **UNAVAILABLE / SIMULATED** (AI prepares handoff dossier) |
 | **Offline Scenarios** | *Local test harness* | **VERIFIED** (`SyntheticDisputeAdapter` with explicit provenance tags) |
+
+---
+
+### Read-only PayPal Sandbox connectivity smoke test
+
+The actual backend adapter reads `PAYPAL_CLIENT_ID` and `PAYPAL_CLIENT_SECRET` from exported environment variables or ignored local `.env` files (repository root or `apps/api`). With **Sandbox credentials only**, run:
+
+```bash
+cd apps/api
+python -m app.services.paypal_sandbox_smoke
+```
+
+This requests an OAuth token, reads the dispute list, and prints only redacted status/UTC metadata (no tokens, credentials, dispute IDs or full API bodies). HTTP 200 with zero disputes is **not** a permissions error; missing credentials report **BLOCKED**, not success. Optional existing-dispute details: `--dispute-id PP-D-...`.
+
+[Full verification evidence, permission troubleshooting, and opt-in Actions workflow](docs/paypal-sandbox-verification.md). The operator reported a successful direct live Sandbox test on October 25, 2026; a separate credential-bearing run of the ProofGraph adapter is required for independent backend live confirmation. Normal CI uses fake credentials and local HTTP contract responses; it never calls PayPal.
 
 ---
 
