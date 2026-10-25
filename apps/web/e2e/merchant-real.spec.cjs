@@ -94,6 +94,10 @@ test("real backend: merchant investigates, saves tracking, checks carrier, revie
   expect(markdown).toContain("Simulated record");
   expect(markdown).toContain("User submitted");
   expect(markdown).toContain("Requirements met (evaluator assessment, not proof of independent verification)");
+  expect(markdown).toContain("Demonstration fixture (no live PayPal or carrier check)");
+  expect(markdown).not.toContain("PAYPAL_API");
+  expect(markdown).not.toContain("API status: VERIFIED");
+  await expect(report.getByText("Verification: Not independently verified").first()).toBeVisible();
   expect(markdown).not.toContain("Established & Verified Facts");
   expect(markdown).not.toMatch(/submitted (?:to|through) PayPal/i);
   await page.keyboard.press("Escape");
