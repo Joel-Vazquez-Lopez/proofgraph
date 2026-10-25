@@ -23,7 +23,7 @@ uvicorn app.main:app --app-dir apps/api --port 8000
 
 A key is never returned in API responses, log messages, graph nodes, or frontend. The server sends the key only in its Authorization header to the fixed HTTPS OpenAI host. Do not put the API key in `NEXT_PUBLIC_*` environment variables. `AI_TIMEOUT_SECONDS=8.0` is currently a fixed safe budget within server configuration.
 
-**Without a valid key**, the API returns `status=FALLBACK_NOT_CONFIGURED`, `model_called=false`, `provenance=NO_MODEL_OUTPUT`, a clear message, and the already-chosen deterministic investigation action. With `AI_PROVIDER=disabled` it returns `FALLBACK_DISABLED` without calling a model.
+The service **defaults to `AI_PROVIDER=disabled`** even when a credential happens to be present. Explicitly set `AI_PROVIDER=openai` to permit an outbound request.\n\n**Without a valid key** (while `AI_PROVIDER=openai`), the API returns `status=FALLBACK_NOT_CONFIGURED`, `model_called=false`, `provenance=NO_MODEL_OUTPUT`, a clear message, and the already-chosen deterministic investigation action. With `AI_PROVIDER=disabled` it returns `FALLBACK_DISABLED` without calling a model.
 
 The UI exposes an opt-in **Analyze dispute text with AI** control. It never silently transmits dispute text during normal case navigation. Explicit reviewer or system-admin permission is required; a merchant/buyer cannot invoke the external transfer endpoint even on their own case. Development auth is header-based demo-only; real deployment needs actual identity and approved personal-data terms.
 
