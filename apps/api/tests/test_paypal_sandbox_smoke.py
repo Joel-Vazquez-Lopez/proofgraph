@@ -198,3 +198,32 @@ def test_cli_emits_only_safe_json_and_nonzero_exit_on_missing_credentials(
     parsed = json.loads(capsys.readouterr().out)
     assert parsed["result"] == "BLOCKED"
     assert parsed["reason"] == "SANDBOX_CREDENTIALS_NOT_CONFIGURED"
+
+
+@pytest.mark.parametrize("payload", [{}, {"items": None}, {"items": "not-a-list"}])
+def test_http_200_without_valid_items_does_not_pass_as_empty(
+    monkeypatch, sandbox_adapter, payload
+):
+    def handler(request):
+        if request.url.path.endswith("/oauth2/token"):
+            return oauth_ok(request)
+        return httpx.Response(200, json=payload)
+
+    wire_http(monkeypatch, handler)
+    result = run_smoke(sandbox_adapter)
+    assert result["oauth_token"]["http_status"] == 200
+    assert result["disputes_list"]["http_status"] == 502
+    assert result["disputes_list"]["item_count"] is None
+    assert result["result"] == "FAIL"
+
+
+def test_malformed_oauth_token_does_not_look_authenticated(monkeypatch, sandbox_adapter):
+    requests = wire_http(
+        monkeypatch,
+        lambda request: httpx.Response(200, json={"expires_in": 3600}),
+    )
+    result = run_smoke(sandbox_adapter)
+    assert result["result"] == "FAIL"
+    assert result["oauth_token"]["http_status"] == 502
+    assert result["disputes_list"]["status"] == "NOT_RUN"
+    assert len(requests) == 1
