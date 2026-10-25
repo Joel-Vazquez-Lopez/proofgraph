@@ -136,3 +136,15 @@ test("mobile viewport fits without horizontal overflow and case cards are keyboa
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(2);
 });
+
+test("real FastAPI synthetic fixture: tracking submission changes the case evidence", async ({ page }) => {
+  // No API interception: Next.js rewrites to the running FastAPI server.
+  await page.goto("/");
+  await page.getByRole("button", { name: /Keychron Q1 Pro/ }).click();
+  await expect(page.getByText("Add tracking information")).toBeVisible();
+  await page.getByPlaceholder("e.g. 940010009999").fill("940010009999");
+  await page.getByRole("button", { name: "Save tracking information" }).click();
+  await expect(page.getByText(/Tracking details submitted/)).toBeVisible();
+  await expect(page.getByText("Tracking number recorded")).toBeVisible();
+  await expect(page.getByText(/Simulated carrier data|Delivery is not confirmed|A delivery record/).first()).toBeVisible();
+});
