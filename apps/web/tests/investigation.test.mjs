@@ -6,7 +6,7 @@ import {
 import {
   getResponseError, isCurrentCase, submissionMessage,
 } from "../src/lib/investigation-actions.mjs";
-import { merchantNextStep, hasUsableDeliveryObservation } from "../src/lib/merchant-workflow.mjs";
+import { merchantNextStep, hasUsableDeliveryObservation, latestCarrierObservation } from "../src/lib/merchant-workflow.mjs";
 
 const observation = (origin, verification_status = "VERIFIED") => ({
   id: `obs-${origin}`, type: "OBSERVATION", label: "Carrier delivery",
@@ -110,4 +110,20 @@ test("API errors extract both text and validation-list details", async () => {
   assert.equal(await getResponseError({ status: 400, json: async () => ({ detail: "Invalid tracking" }) }, "Failed"), "Invalid tracking");
   assert.equal(await getResponseError({ status: 422, json: async () => ({ detail: [{ msg: "field required" }] }) }, "Failed"), "field required");
   assert.equal(await getResponseError({ status: 503, json: async () => { throw new Error("not JSON"); } }, "Service unavailable"), "Service unavailable (HTTP 503)");
+});
+
+test("append-only carrier history uses the latest event, not a historical delivery", () => {
+  const shipment = { content: { tracking_number: "T123" } };
+  const initial = observation("SYNTHETIC_FIXTURE");
+  const corrected = { ...observation("SYNTHETIC_FIXTURE", "UNVERIFIED"), id: "later", content: { tracking_number: "T123", status: "NOT_FOUND" } };
+  assert.equal(hasUsableDeliveryObservation(shipment, [initial, corrected]), false);
+  assert.equal(latestCarrierObservation(shipment, [initial, corrected])?.id, "later");
+  assert.equal(hasUsableDeliveryObservation(shipment, [corrected, initial]), true);
+});
+
+test("submitted condition evidence advances the merchant beyond the upload prompt", () => {
+  const base = { isReady: false, isReview: false, category: "SIGNIFICANTLY_NOT_AS_DESCRIBED", hasTracking: true, hasDeliveryRecord: false };
+  assert.equal(merchantNextStep(base), "upload-condition");
+  assert.equal(merchantNextStep({ ...base, hasConditionEvidence: true }), "condition-submitted");
+  assert.equal(merchantNextStep({ ...base, isReady: true, hasConditionEvidence: true }), "review");
 });
