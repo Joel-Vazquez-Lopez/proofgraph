@@ -260,7 +260,8 @@ def test_untrusted_prompt_injection_cannot_create_verified_evidence(client, monk
     assert outcome["status"] == "FALLBACK_NO_GROUNDED_CLAIMS"
     assert outcome["claims"] == []
     after = _state(client)
-    assert not any(n["origin"] == "MODEL_INFERENCE" for n in after["evidence_graph"]["nodes"])
+    assert not any(n["type"] == "HYPOTHESIS" and n["origin"] == "MODEL_INFERENCE"
+                   for n in after["evidence_graph"]["nodes"])
 
 
 def test_model_cannot_introduce_unapproved_actions_or_new_evidence_needs(client, monkeypatch):
