@@ -136,6 +136,7 @@ class DisputeService:
         nodes_created: List[str] = []
         edges_created: List[str] = []
         integrity_finding: Optional[EvidenceIntegrityFinding] = None
+        carrier_outcome_note = ""
 
         evidence_item_id = f"ev_{uuid.uuid4().hex[:8]}"
 
@@ -215,7 +216,7 @@ class DisputeService:
             # A tracking number alone NEVER establishes delivery.
             # Carrier verification occurs ONLY if explicitly requested or authorized.
             if submission.verify_carrier_now or submission.action_id == "act_carrier_lookup":
-                carrier_nodes, carrier_edges = self._perform_carrier_verification_internal(
+                carrier_nodes, carrier_edges, carrier_result = self._perform_carrier_verification_internal(
                     graph=graph,
                     ship_node=ship_node,
                     carrier_name=carrier_clean,
@@ -224,6 +225,7 @@ class DisputeService:
                 )
                 nodes_created.extend(carrier_nodes)
                 edges_created.extend(carrier_edges)
+                carrier_outcome_note = self._carrier_outcome_message(carrier_result)
 
         # Close any open question nodes answered by this submission
         open_questions = graph.get_open_questions()
@@ -279,8 +281,22 @@ class DisputeService:
             new_state=new_state,
             readiness=readiness,
             integrity_finding=integrity_finding,
-            message=f"Evidence ingested successfully. Case transitioned to {new_state.value}."
+            message=f"Evidence ingested successfully. Case transitioned to {new_state.value}. {carrier_outcome_note}".strip()
         )
+
+    @staticmethod
+    def _carrier_outcome_message(result: CarrierVerificationResult) -> str:
+        if result.verification_outcome == "SIMULATED":
+            return (
+                f"Simulated carrier fixture lookup returned {result.status}. "
+                "No independent external carrier verification occurred."
+            )
+        if result.verification_outcome == "UNAVAILABLE":
+            return (
+                "Independent carrier verification unavailable: no external carrier "
+                "gateway is configured. Tracking remains unverified."
+            )
+        return "Independent external carrier verification completed."
 
     def _perform_carrier_verification_internal(
         self,
@@ -289,7 +305,7 @@ class DisputeService:
         carrier_name: str,
         tracking_number: str,
         case_data_source: DataSourceType
-    ) -> tuple[list[str], list[str]]:
+    ) -> tuple[list[str], list[str], CarrierVerificationResult]:
         nodes_created = []
         edges_created = []
 
@@ -300,18 +316,41 @@ class DisputeService:
         )
 
         obs_id = f"obs_carrier_{tracking_number[-4:]}"
-        is_verified = result.status in ("DELIVERED", "IN_TRANSIT", "EXCEPTION")
-        
+        has_status = result.status in ("DELIVERED", "IN_TRANSIT", "EXCEPTION")
+        independently_verified = (
+            has_status and result.independently_verified
+            and result.verification_outcome == "EXTERNALLY_VERIFIED"
+            and result.origin == EvidenceOrigin.VERIFIED_EXTERNAL
+            and not result.is_synthetic
+        )
+        # Compatibility boundary: a VERIFIED fixture observation currently denotes
+        # scenario-grounded truth for Agent 1's existing demo evaluator, NOT
+        # independent corroboration. Do not change readiness semantics in this PR.
+        scenario_verified = has_status and result.verification_outcome == "SIMULATED" and result.is_synthetic
+        verification_scope = (
+            "INDEPENDENT_EXTERNAL" if independently_verified else
+            "SIMULATED_FIXTURE" if result.is_synthetic else
+            "EXTERNAL_UNAVAILABLE"
+        )
+
         obs_node = graph.add_node(
             node_type=NodeType.OBSERVATION,
-            label=f"Carrier Telemetry: {result.status} ({carrier_name} #{tracking_number})",
+            label=f"{'Simulated carrier status' if result.is_synthetic else 'Carrier lookup result'}: {result.status} ({carrier_name} #{tracking_number})",
             content=result.model_dump(),
             source=result.verification_source,
             origin=result.origin,
-            verification_status=EvidenceVerificationStatus.VERIFIED if is_verified else EvidenceVerificationStatus.UNVERIFIED,
-            verified_at=datetime.now(timezone.utc).isoformat() if is_verified else None,
+            verification_status=(
+                EvidenceVerificationStatus.VERIFIED
+                if scenario_verified or independently_verified
+                else EvidenceVerificationStatus.UNVERIFIED
+            ),
+            verified_at=datetime.now(timezone.utc).isoformat() if independently_verified else None,
             node_id=obs_id,
-            metadata={"audit": result.audit_note}
+            metadata={
+                "audit": result.audit_note,
+                "verification_scope": verification_scope,
+                "independently_verified": independently_verified,
+            },
         )
         nodes_created.append(obs_node.id)
 
@@ -320,7 +359,11 @@ class DisputeService:
             source_id=obs_node.id,
             target_id=ship_node.id,
             edge_type=EdgeType.DERIVED_FROM,
-            provenance=f"Carrier telemetry scan verified via {result.verification_source}"
+            provenance=(
+                f"Simulated carrier fixture status from {result.verification_source}; not externally verified."
+                if result.is_synthetic else
+                f"Carrier lookup outcome ({result.verification_outcome}) via {result.verification_source}."
+            )
         )
         edges_created.append(edge_derived.id)
 
@@ -341,30 +384,47 @@ class DisputeService:
                         source_id=obs_node.id,
                         target_id=order_nodes[0].id,
                         edge_type=EdgeType.CONTRADICTS,
-                        provenance=f"Destination Mismatch: Carrier delivered to ZIP {delivered_zip}, but buyer order specified ZIP {dest_zip}."
+                        provenance=(
+                            f"{'SIMULATED ' if result.is_synthetic else ''}Destination Mismatch: "
+                            f"carrier status reports delivery to ZIP {delivered_zip}, "
+                            f"but order specifies ZIP {dest_zip}."
+                        )
                     )
                     edges_created.append(edge_contra.id)
             elif dest_zip and delivered_zip and dest_zip == delivered_zip:
-                # Address matched: verify the shipment node through explicit auditable event
-                graph.verify_node(
-                    node_id=ship_node.id,
-                    verifier_source=result.verification_source,
-                    origin=result.origin,
-                    audit_note=f"Carrier confirmed delivery to matching destination postal code {dest_zip}"
-                )
+                if independently_verified:
+                    # Preserve submission provenance: verification does not rewrite origin.
+                    graph.verify_node(
+                        node_id=ship_node.id,
+                        verifier_source=result.verification_source,
+                        audit_note=f"Independent carrier corroboration matched destination postal code {dest_zip}",
+                    )
+                elif result.is_synthetic:
+                    # A fixture match is informative in the demo but cannot verify
+                    # a user-submitted tracking claim against the real carrier.
+                    ship_node.metadata.setdefault("simulated_crosschecks", []).append({
+                        "observation_id": obs_node.id,
+                        "result": "MATCHING_DESTINATION_POSTAL_CODE",
+                        "external_verification": False,
+                    })
 
         # Close open question for carrier lookup if present
-        for q in graph.get_open_questions():
-            if "carrier" in q.label.lower() or "act_carrier_lookup" in q.id:
-                edge_ans = graph.add_edge(
-                    source_id=obs_node.id,
-                    target_id=q.id,
-                    edge_type=EdgeType.ANSWERS,
-                    provenance=f"Carrier query completed: status {result.status}"
-                )
-                edges_created.append(edge_ans.id)
+        if result.verification_outcome != "UNAVAILABLE":
+            for q in graph.get_open_questions():
+                if "carrier" in q.label.lower() or "act_carrier_lookup" in q.id:
+                    edge_ans = graph.add_edge(
+                        source_id=obs_node.id,
+                        target_id=q.id,
+                        edge_type=EdgeType.ANSWERS,
+                        provenance=(
+                            f"Simulated fixture lookup returned {result.status}"
+                            if result.is_synthetic else
+                            f"External carrier lookup returned {result.status}"
+                        ),
+                    )
+                    edges_created.append(edge_ans.id)
 
-        return nodes_created, edges_created
+        return nodes_created, edges_created, result
 
     def verify_carrier_shipment(self, dispute_id: str) -> EvidenceSubmissionResult:
         """
@@ -386,7 +446,7 @@ class DisputeService:
         carrier_name = primary_ship.content.get("carrier_name", "USPS")
         tracking_number = primary_ship.content.get("tracking_number", "")
 
-        nodes_created, edges_created = self._perform_carrier_verification_internal(
+        nodes_created, edges_created, carrier_result = self._perform_carrier_verification_internal(
             graph=graph,
             ship_node=primary_ship,
             carrier_name=carrier_name,
@@ -401,10 +461,16 @@ class DisputeService:
         timeline = json.loads(case.timeline_json or "[]")
         timeline.append({
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "actor": "CARRIER_GATEWAY",
-            "action": f"Executed independent carrier verification for #{tracking_number}",
+            "actor": "SYNTHETIC_CARRIER_FIXTURE" if carrier_result.is_synthetic else "CARRIER_GATEWAY",
+            "action": (
+                f"Simulated carrier fixture lookup for #{tracking_number}"
+                if carrier_result.is_synthetic else
+                f"Carrier verification unavailable for #{tracking_number}"
+                if carrier_result.verification_outcome == "UNAVAILABLE" else
+                f"Independent carrier verification for #{tracking_number}"
+            ),
             "state_transition": f"{current_state.value} -> {new_state.value}",
-            "notes": f"Verification status recorded: {readiness.rationale}"
+            "notes": f"{self._carrier_outcome_message(carrier_result)} {readiness.rationale}"
         })
 
         case.state = new_state.value
@@ -423,7 +489,7 @@ class DisputeService:
             new_state=new_state,
             readiness=readiness,
             integrity_finding=None,
-            message=f"Independent carrier verification executed. Case state: {new_state.value}."
+            message=f"{self._carrier_outcome_message(carrier_result)} Case state: {new_state.value}."
         )
 
     def _ensure_seed_scenarios(self):
