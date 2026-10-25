@@ -66,7 +66,7 @@ def test_delivery_location_changes_recommendation(postal, expected):
     assert decision.chosen_action.action_id == expected
     assert record.id in decision.chosen_action.rationale
     assert order.id in decision.chosen_action.rationale or postal == "10001"
-    assert "carrier_delivered" in decision.chosen_action.rationale
+    assert ("buyer_physically_received_item" if postal == "10001" else "carrier_delivered") in decision.chosen_action.rationale
     assert decision.chosen_action.expected_information_gain == 0.0
 
 
