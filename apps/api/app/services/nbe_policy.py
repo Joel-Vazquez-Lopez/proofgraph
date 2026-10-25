@@ -29,6 +29,11 @@ class NextBestEvidencePolicy(ABC):
 
 
 class HeuristicNBEPolicy(NextBestEvidencePolicy):
+    def __init__(self, carrier_lookup_available=True):
+        # Injected by DisputeService from the actual adapter capability.
+        # Direct policy-only tests default to an available test lookup.
+        self.carrier_lookup_available = carrier_lookup_available
+
     @staticmethod
     def _escalation(reason):
         return CandidateAction(
@@ -181,7 +186,25 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
                 tracking_no = shipment.content.get("tracking_number", "UNKNOWN")
                 carrier = shipment.content.get("carrier_name", "Carrier")
                 
-                if "act_carrier_lookup" not in attempted_actions:
+                if not self.carrier_lookup_available:
+                    if "act_request_carrier_receipt" not in attempted_actions:
+                        candidates.append(CandidateAction(
+                            action_id="act_request_carrier_receipt",
+                            action_type=ActionType.REQUEST_MERCHANT_FULFILLMENT,
+                            title="Request Carrier Acceptance Records",
+                            description="External carrier lookup is not configured. Request merchant carrier acceptance documentation instead.",
+                            target_party="MERCHANT",
+                            expected_information_gain=0.0,
+                            acquisition_friction=0.7,
+                            utility_score=0.8 / 1.7,
+                            rationale="External carrier API unavailable; merchant submission remains unverified until corroborated.",
+                            required_inputs=["carrier_dropoff_receipt"],
+                        ))
+                    else:
+                        candidates.append(self._escalation(
+                            "External carrier provider unavailable and merchant receipt inquiry exhausted."
+                        ))
+                elif "act_carrier_lookup" not in attempted_actions:
                     action = CandidateAction(
                         action_id="act_carrier_lookup",
                         action_type=ActionType.CARRIER_TRACKING_LOOKUP,
@@ -252,7 +275,25 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
 
                 elif st in ("IN_TRANSIT", "DELAYED", "EXCEPTION"):
                     # Scenario B — No delivery / in transit
-                    if "act_carrier_transit_monitor" not in attempted_actions:
+                    if not self.carrier_lookup_available:
+                        if "act_request_carrier_receipt" not in attempted_actions:
+                            candidates.append(CandidateAction(
+                                action_id="act_request_carrier_receipt",
+                                action_type=ActionType.REQUEST_MERCHANT_FULFILLMENT,
+                                title="Request Merchant Status Update",
+                                description="Carrier telemetry cannot be rechecked automatically; request documented update.",
+                                target_party="MERCHANT",
+                                expected_information_gain=0.0,
+                                acquisition_friction=0.7,
+                                utility_score=0.8 / 1.7,
+                                rationale="Carrier gateway unavailable; do not promise live monitoring.",
+                                required_inputs=["carrier_status_update"],
+                            ))
+                        else:
+                            candidates.append(self._escalation(
+                                "Carrier status cannot be rechecked and merchant update request is exhausted."
+                            ))
+                    elif "act_carrier_transit_monitor" not in attempted_actions:
                         candidates.append(CandidateAction(
                             action_id="act_carrier_transit_monitor",
                             action_type=ActionType.CARRIER_STATUS_MONITOR,
