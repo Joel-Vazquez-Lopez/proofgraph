@@ -28,3 +28,11 @@ export function submissionMessage(kind, result, synthetic) {
     ? "Carrier lookup finished using simulated demonstration data, not a live carrier integration."
     : "Carrier lookup request completed. Consult the updated evidence to determine whether delivery was independently verified.") + state;
 }
+
+export function friendlyRequestError(error, fallback) {
+  const message = typeof error?.message === "string" ? error.message : "";
+  if (!message || /^(failed to fetch|load failed|networkerror|network request failed)/i.test(message)) {
+    return `${fallback}. Check your connection, then retry.`;
+  }
+  return message;
+}
