@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: [main, master]
+    branches: [main, master, agent/backend-tracking-identity]
   pull_request:
     branches: [main, master, integration/proofgraph-v1]
 
