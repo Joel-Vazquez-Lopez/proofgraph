@@ -69,7 +69,9 @@ class DisputeService:
                 "act_carrier_lookup": data_source == DataSourceType.SYNTHETIC_FIXTURE,
             })
             return policy.evaluate_candidates(category, graph, readiness)
-        return self.nbe_policy.evaluate_candidates(category, graph, readiness)
+        return HeuristicNBEPolicy(
+            carrier_lookup_available=data_source == DataSourceType.SYNTHETIC_FIXTURE
+        ).evaluate_candidates(category, graph, readiness)
 
     @staticmethod
     def _record_discriminative_question(graph: EvidenceGraph, decision: PolicyDecision) -> None:
