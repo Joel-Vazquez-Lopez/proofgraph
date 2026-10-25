@@ -238,6 +238,8 @@ class InvestigationReport(BaseModel):
     data_source: DataSourceType
     executive_summary: str
     verified_facts: List[str]
+    # Additive, demo-specific report field; never counted as external corroboration.
+    simulated_facts: List[str] = Field(default_factory=list)
     unresolved_questions: List[str]
     identified_contradictions: List[str]
     missing_evidence_inventory: List[str]
