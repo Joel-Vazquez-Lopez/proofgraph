@@ -95,7 +95,8 @@ def test_real_api_route_invokes_openai_http_and_persists_only_model_inference(cl
     before = _state(client)
     calls = []
 
-    def intercept(url, *, json: payload, headers, timeout, follow_redirects):
+    def intercept(url, *, json, headers, timeout, follow_redirects):
+        payload = json
         calls.append((url, payload, headers))
         assert url == "https://api.openai.com/v1/chat/completions"
         assert payload["model"] == "gpt-4o-mini"
