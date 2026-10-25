@@ -65,6 +65,23 @@ Metrics collected:
 
 The synthetic oracle never fabricates externally verified observations. It can produce unverified artifacts for useful actions, but it does **not** simulate actual carrier truth, response rates, cost distributions, or case adjudication. Results are challenge-suite/fixture evidence, **not held-out generalization**. The benchmark includes a deliberate negative case in which a newer delivery scan is appended before an older transit scan: the new assessor fails to account for report chronology and treats an ordinary update as a conflict. The legacy heuristic can choose the better next action there. Preserve and report this negative result rather than special-case it without a principled temporal model.
 
+### Reproducible GitHub Actions result (2026-10-25)
+
+[Successful CI run](https://github.com/Joel-Vazquez-Lopez/proofgraph/actions/runs/40185609792): **63 passed, 2 warnings**, with both backend/benchmark and frontend-build jobs successful. The full synthetic investigation demo executes all four graph snapshots and reaches **human-handoff readiness only**, without adjudication.
+
+| Synthetic challenge metric | Hypothesis discrimination | Legacy heuristic |
+| --- | ---: | ---: |
+| Correct first supported/useful action (of 64 perturbed examples) | **60** | 32 |
+| Correct escalate-vs-continue decision | **64** | 56 |
+| Explicitly unavailable actions recommended | **0** | 4 |
+| Previously-issued actions repeated | 0 | 0 |
+| Unsupported independent-verification phrasing found by limited text check | 0 | 0 |
+| Mean acquisition steps to first **synthetic UNVERIFIED relevant artifact**, excluding required escalations, max 5 | **1.308** | 2.154 |
+
+**Known negative result:** Four variations of `chronological_update_to_delivery` are **worse** under the new policy. The adapter treats an old IN_TRANSIT scan plus a newer DELIVERED scan as an inconsistency, when chronology indicates a normal delivery update; the legacy heuristic chooses the appropriate proof-of-handoff request. We are not fixing this by adding case-name exceptions: it requires timestamps, supersession semantics and out-of-order event testing.
+
+These are **16 hand-constructed families × four deterministic perturbations**, not 64 independent real disputes or an unseen blind test. Accepted action labels are specified before execution by a separate scenario oracle, but are designed within the same project. Acquisition artifacts are simulated and UNVERIFIED. Much of the observed baseline difference arises from brittle source-label matching in the old policy. The gain is evidence of more robust logic *within these cases*, not a generalizable percentage improvement in real adjudication.
+
 ## Current limitations and coordination requests
 
 **Backend:**
