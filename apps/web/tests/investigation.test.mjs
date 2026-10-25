@@ -4,7 +4,7 @@ import {
   evidenceProvenance, investigationSummary, generateReviewMarkdown,
 } from "../src/lib/investigation-report.mjs";
 import {
-  getResponseError, isCurrentCase, submissionMessage,
+  friendlyRequestError, getResponseError, isCurrentCase, submissionMessage,
 } from "../src/lib/investigation-actions.mjs";
 import { merchantNextStep, hasUsableDeliveryObservation, latestCarrierObservation } from "../src/lib/merchant-workflow.mjs";
 
@@ -126,4 +126,9 @@ test("submitted condition evidence advances the merchant beyond the upload promp
   assert.equal(merchantNextStep(base), "upload-condition");
   assert.equal(merchantNextStep({ ...base, hasConditionEvidence: true }), "condition-submitted");
   assert.equal(merchantNextStep({ ...base, isReady: true, hasConditionEvidence: true }), "review");
+});
+
+test("offline network failures have a clear retry path while API details remain visible", () => {
+  assert.match(friendlyRequestError(new TypeError("Failed to fetch"), "Could not load cases"), /Could not load cases.*Check your connection.*retry/);
+  assert.equal(friendlyRequestError(new Error("Temporary service issue"), "Could not load cases"), "Temporary service issue");
 });
