@@ -224,11 +224,9 @@ def test_reviewer_permission_blocks_merchant_buyer_and_cross_case_exfiltration(c
 
 def test_untrusted_prompt_injection_cannot_create_verified_evidence(client, monkeypatch):
     monkeypatch.setattr(settings, "OPENAI_API_KEY", "dummy")
+    _state(client)  # Seed the case before opening an independent write transaction.
     with SessionLocal() as db:
-        case = db.query(DisputeCaseDB).filter_by(dispute_id=CASE_ID).one_or_none()
-        if not case:
-            _state(client)
-            case = db.query(DisputeCaseDB).filter_by(dispute_id=CASE_ID).one()
+        case = db.query(DisputeCaseDB).filter_by(dispute_id=CASE_ID).one()
         graph = json.loads(case.graph_json)
         claim = next(n for n in graph["nodes"] if n["type"] == "CLAIM")
         injection = (
