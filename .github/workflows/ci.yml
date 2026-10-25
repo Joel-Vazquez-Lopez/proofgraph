@@ -73,6 +73,13 @@ jobs:
         working-directory: apps/web
         run: npm install --no-save --package-lock=false @playwright/test@1.56.1
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install FastAPI dependencies for real integration browser test
+        run: python -m pip install -r apps/api/requirements.txt
+
       - name: Install Chromium
         working-directory: apps/web
         run: npx playwright install --with-deps chromium
