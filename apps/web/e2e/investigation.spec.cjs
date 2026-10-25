@@ -147,7 +147,8 @@ test("empty account shows a helpful empty state without fabricating cases", asyn
   await page.goto("/");
   await expect(page.getByText("No cases are available for this account.")).toBeVisible();
   await expect(page.getByText("Select a case to begin investigation.")).toBeVisible();
-  await expect(page.getByRole("alert")).toHaveCount(0);
+  // Next.js may expose its own inert route-announcer alert; only check app errors.
+  await expect(page.getByRole("alert").filter({ hasText: /Could not load cases|Cases are temporarily unavailable/ })).toHaveCount(0);
 });
 
 test("failed initial case-list load offers retry instead of incorrectly claiming no cases", async ({ page }) => {
