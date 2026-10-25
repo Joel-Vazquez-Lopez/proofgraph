@@ -149,6 +149,7 @@ class DecisionReadinessEvaluator:
             n for n in items
             if str(n.content.get("mime_type", "")).lower().startswith("image/")
             and n.origin in (EvidenceOrigin.USER_SUBMITTED, EvidenceOrigin.SYNTHETIC_FIXTURE, EvidenceOrigin.VERIFIED_EXTERNAL)
+            and (n.source.upper().startswith("BUYER") or n.origin in (EvidenceOrigin.SYNTHETIC_FIXTURE, EvidenceOrigin.VERIFIED_EXTERNAL))
             and n.verification_status != EvidenceVerificationStatus.REJECTED
         ]
         if photos:
@@ -186,6 +187,13 @@ class DecisionReadinessEvaluator:
                 missing.append("Both transactions reconciled to the same original order reference.")
             else:
                 satisfied.append("Distinct corroborated transactions reference the same order.")
+            # Distinct payer/merchant identities cannot support a straightforward
+            # duplicate-charge comparison simply because amounts agree.
+            for field in ("payer", "payee"):
+                identities = {str(n.content.get(field, "")).strip() for n in pairs}
+                identities.discard("")
+                if len(identities) > 1:
+                    conflicts.append(f"Transaction records identify different {field} values.")
             if len(amounts) != 1 or any(amt is None or not currency for amt, currency in amounts):
                 missing.append("Consistent transaction amount and currency for duplicate-charge comparison.")
             else:
