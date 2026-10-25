@@ -1,12 +1,12 @@
 // UI action routing based only on fields already provided in DisputeDetail.
-export function merchantNextStep({ isReady, isReview, category, hasTracking, hasDeliveryRecord }) {
+export function merchantNextStep({ isReady, isReview, category, hasTracking, hasDeliveryRecord, hasConditionEvidence = false }) {
   if (isReady) return "review";
   if (isReview) return "human-review";
   if (category === "ITEM_NOT_RECEIVED") {
     if (!hasTracking) return "submit-tracking";
     if (!hasDeliveryRecord) return "carrier-lookup";
   }
-  if (category === "SIGNIFICANTLY_NOT_AS_DESCRIBED") return "upload-condition";
+  if (category === "SIGNIFICANTLY_NOT_AS_DESCRIBED") return hasConditionEvidence ? "condition-submitted" : "upload-condition";
   return "manual-follow-up";
 }
 
