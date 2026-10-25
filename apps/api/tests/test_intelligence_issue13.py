@@ -11,7 +11,7 @@ from PIL import Image
 
 from app.main import app
 from app.config import settings
-from app.models.db_models import Base, engine, init_db
+from app.models.db_models import Base, engine, init_db, SessionLocal, DisputeCaseDB
 from app.services.evidence_graph import EvidenceGraph
 from app.services.evaluator import DecisionReadinessEvaluator
 from app.services.nbe_policy import HeuristicNBEPolicy
@@ -242,3 +242,59 @@ def test_discriminative_policy_separate_snad_baseline_and_inr_misdelivery(monkey
     assert wrong["current_policy_decision"]["policy_name"] == "HypothesisDiscriminationPolicy"
     assert wrong["current_policy_decision"]["chosen_action"]["action_id"] == "act_resolve_contradiction"
     assert not wrong["readiness"]["is_decision_ready"]
+
+@pytest.mark.parametrize("policy_type", ["heuristic", "discriminative"])
+def test_real_case_does_not_recommend_nonexistent_carrier_integration(policy_type, monkeypatch):
+    monkeypatch.setattr(settings, "NBE_POLICY_TYPE", policy_type)
+    Base.metadata.drop_all(bind=engine)
+    init_db()
+    tc = TestClient(app)
+    case_id = "PP-D-INR-8841"
+    assert tc.get(f"/api/v1/disputes/{case_id}").status_code == 200
+    with SessionLocal() as db:
+        case = db.query(DisputeCaseDB).filter_by(dispute_id=case_id).one()
+        case.data_source = "PAYPAL_SANDBOX"
+        db.commit()
+    submission = tc.post(f"/api/v1/disputes/{case_id}/evidence", json={
+        "action_id": "act_merchant_tracking",
+        "submitter_role": "MERCHANT",
+        "carrier_name": "USPS",
+        "tracking_number": "940010009999",
+    })
+    assert submission.status_code == 200, submission.text
+    snapshot = tc.get(f"/api/v1/disputes/{case_id}").json()
+    assert snapshot["readiness"]["is_decision_ready"] is False
+    decision = snapshot["current_policy_decision"]["chosen_action"]
+    assert decision["action_id"] == "act_request_carrier_receipt"
+    assert decision["action_type"] == "REQUEST_MERCHANT_FULFILLMENT"
+    assert "unavailab" in decision["rationale"].lower()
+    assert all(n["origin"] != "VERIFIED_EXTERNAL"
+               for n in snapshot["evidence_graph"]["nodes"] if n["type"] == "OBSERVATION")
+
+
+def test_snad_merchant_image_cannot_replace_buyer_condition_evidence():
+    g, _ = _graph()
+    g.add_node(N.EVIDENCE_ITEM, "Merchant photo",
+               {"mime_type": "image/png"}, "MERCHANT_UPLOAD",
+               origin=O.USER_SUBMITTED)
+    g.add_node(N.EVIDENCE_ITEM, "Merchant listing",
+               {"kind": "merchant_listing"}, "MERCHANT_UPLOAD",
+               origin=O.USER_SUBMITTED)
+    result = DecisionReadinessEvaluator.evaluate(C.SIGNIFICANTLY_NOT_AS_DESCRIBED, g)
+    assert not result.is_decision_ready
+    assert any("buyer condition" in x.lower() for x in result.missing_requirements)
+
+
+def test_duplicate_transactions_for_different_payers_need_human_reconciliation():
+    g, _ = _graph()
+    first = g.get_nodes_by_type(N.TRANSACTION)[0]
+    first.content["payer"] = "payer-one"
+    g.add_node(N.TRANSACTION, "Another payer's payment",
+               {"transaction_id": "pay-b", "order_id": "ord-1", "amount": 40,
+                "currency": "USD", "payer": "payer-two"},
+               "PAYPAL", origin=O.VERIFIED_EXTERNAL,
+               verification_status=V.VERIFIED)
+    readiness = DecisionReadinessEvaluator.evaluate(C.DUPLICATE_TRANSACTION, g)
+    assert not readiness.is_decision_ready
+    assert readiness.requires_escalation
+    assert "different payer" in " ".join(readiness.active_contradictions).lower()
