@@ -9,7 +9,7 @@ import { CaseOverview } from "@/components/CaseOverview";
 import { ReviewPackageModal } from "@/components/ReviewPackageModal";
 import { AdvancedWorkspace } from "@/components/AdvancedWorkspace";
 import { GraphNodeData } from "@/components/EvidenceGraphView";
-import { getResponseError, isCurrentCase, submissionMessage } from "@/lib/investigation-actions.mjs";
+import { friendlyRequestError, getResponseError, isCurrentCase, submissionMessage } from "@/lib/investigation-actions.mjs";
 
 // ─────────────────────────────────────────────
 // Types aligned with the backend API contracts
@@ -131,7 +131,7 @@ export default function ProofGraphPage() {
       }
     } catch (err: any) {
       if (request === listRequestRef.current) {
-        setListError(err?.message || "Could not load cases.");
+        setListError(friendlyRequestError(err, "Could not load cases"));
       }
     } finally {
       if (request === listRequestRef.current) setLoadingList(false);
@@ -158,7 +158,7 @@ export default function ProofGraphPage() {
       }
     } catch (err: any) {
       if (!controller.signal.aborted && isCurrentCase(id, activeCaseRef.current, request, detailRequestRef.current)) {
-        setDetailError(err?.message || "Could not load this investigation.");
+        setDetailError(friendlyRequestError(err, "Could not load case details"));
       }
     } finally {
       if (isCurrentCase(id, activeCaseRef.current, request, detailRequestRef.current)) {
@@ -227,7 +227,8 @@ export default function ProofGraphPage() {
         submitter_role: "MERCHANT",
         carrier_name: carrierName,
         tracking_number: trackingNumber,
-        verify_carrier_now: true,
+        // Tracking receipt and carrier lookup are separate, auditable merchant steps.
+        verify_carrier_now: false,
         notes,
       };
       const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}/evidence`, {
@@ -291,7 +292,7 @@ export default function ProofGraphPage() {
           {/* ── Left Column: Case List (4 cols) ── */}
           <section aria-label="Dispute cases" className="lg:col-span-4 lg:sticky lg:top-[72px]">
             {loadingList && disputes.length === 0 ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-8 flex flex-col items-center gap-3 text-slate-500">
+              <div role="status" aria-live="polite" className="bg-white rounded-2xl border border-slate-200 p-8 flex flex-col items-center gap-3 text-slate-500">
                 <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
                 <span className="text-xs font-semibold">Loading cases…</span>
               </div>
@@ -303,7 +304,9 @@ export default function ProofGraphPage() {
                     <button type="button" onClick={fetchDisputes} className="mt-2 font-bold underline focus-visible:ring-2 focus-visible:ring-rose-600">Retry loading cases</button>
                   </div>
                 )}
-                <CaseList disputes={disputes} selectedId={selectedId} onSelectCase={selectCase} />
+                {(disputes.length > 0 || !listError) && (
+                  <CaseList disputes={disputes} selectedId={selectedId} onSelectCase={selectCase} />
+                )}
               </div>
             )}
           </section>
@@ -311,7 +314,7 @@ export default function ProofGraphPage() {
           {/* ── Right Column: Investigation View (8 cols) ── */}
           <section className="lg:col-span-8 flex flex-col gap-5">
             {loadingDetail ? (
-              <div className="bg-white rounded-2xl border border-slate-200 p-12 flex flex-col items-center gap-3 text-slate-500">
+              <div role="status" aria-live="polite" className="bg-white rounded-2xl border border-slate-200 p-12 flex flex-col items-center gap-3 text-slate-500">
                 <RefreshCw className="w-6 h-6 animate-spin text-blue-600" />
                 <span className="text-xs font-semibold">Loading case details…</span>
               </div>

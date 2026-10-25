@@ -149,7 +149,7 @@ export const ReviewPackageModal: React.FC<ReviewPackageModalProps> = ({
                       </span>
                     </div>
                     <p className="text-[11px] text-slate-600 mt-1">{record.description}</p>
-                    <p className="text-[11px] text-slate-500 mt-1">Source: {record.source} · API verification status: {record.status}</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Source: {record.source} · Verification: {record.verification}</p>
                   </li>
                 ))}
               </ul>
