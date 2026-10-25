@@ -125,6 +125,7 @@ def _fallback(status, message, policy_action, called=False):
         model=settings.OPENAI_MODEL if settings.AI_PROVIDER == "openai" else None,
         model_called=called, message=message,
         fallback_action_id=policy_action,
+        provenance="NO_MODEL_OUTPUT — deterministic policy fallback only",
     )
 
 
