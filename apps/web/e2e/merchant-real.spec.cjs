@@ -190,3 +190,20 @@ test("real backend: visible loading and recoverable network failure without API 
   await expect(page.getByText("Customer says", { exact: true })).toBeVisible();
   await expect(page.getByRole("heading", { name: "My Cases" })).toBeVisible();
 });
+
+test("real backend: loading state is announced during a throttled genuine API fetch", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "My Cases" })).toBeVisible();
+  await expect(page.getByText("Customer says", { exact: true })).toBeVisible();
+
+  // Chromium slows the REAL network stack; no API routes are fulfilled or mocked.
+  const session = await page.context().newCDPSession(page);
+  await session.send("Network.emulateNetworkConditions", {
+    offline: false, latency: 1200, downloadThroughput: 10000000, uploadThroughput: 10000000,
+  });
+  await page.getByRole("button", { name: /Artisan Espresso Blend/ }).click();
+  await expect(page.getByRole("status").filter({ hasText: "Loading case details" })).toBeVisible();
+  await expect(page.getByText("Customer says", { exact: true })).toBeVisible({ timeout: 20000 });
+  await expect(page.getByRole("status").filter({ hasText: "Loading case details" })).toHaveCount(0);
+  await session.detach();
+});
