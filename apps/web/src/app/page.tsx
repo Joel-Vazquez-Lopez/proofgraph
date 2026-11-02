@@ -139,17 +139,19 @@ export default function ProofGraphPage() {
     }
   }, []);
 
-  const fetchDisputeDetail = useCallback(async (id: string) => {
+  const fetchDisputeDetail = useCallback(async (id: string, silent = false) => {
     if (!id || activeCaseRef.current !== id) return;
     const request = ++detailRequestRef.current;
     detailAbortRef.current?.abort();
     const controller = new AbortController();
     detailAbortRef.current = controller;
-    setLoadingDetail(true);
-    setDetailError(null);
-    setDispute(null); // Never display an old case while fetching another.
-    setSelectedNode(null);
-    setShowReviewModal(false);
+    if (!silent) {
+      setLoadingDetail(true);
+      setDetailError(null);
+      setDispute(null); // Never display an old case while fetching another.
+      setSelectedNode(null);
+      setShowReviewModal(false);
+    }
     try {
       const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}`, { signal: controller.signal });
       if (!res.ok) throw new Error(await getResponseError(res, "Could not load case details"));
@@ -245,7 +247,7 @@ export default function ProofGraphPage() {
     } finally { setSubmitting(false); }
   };
 
-  const handleUploadFile = async (file: File) => {
+  const handleUploadFile = async (file: File, actionId?: string) => {
     if (!dispute || uploading) return;
     const id = dispute.dispute_id;
     setUploading(true);
@@ -255,6 +257,9 @@ export default function ProofGraphPage() {
       formData.append("file", file);
       formData.append("submitter_role", "MERCHANT");
       formData.append("notes", "Merchant-submitted supporting evidence");
+      if (actionId) {
+        formData.append("action_id", actionId);
+      }
       const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}/upload-evidence`, { method: "POST", body: formData });
       if (!res.ok) throw new Error(await getResponseError(res, "File upload failed"));
       const result = await res.json();
@@ -331,7 +336,7 @@ export default function ProofGraphPage() {
               <>
                 {/* Primary investigation flow: What happened / What we know / What to do */}
                 <CaseOverview
-                  key={dispute.dispute_id}
+                  key={`case-overview-${dispute.dispute_id}`}
                   dispute={dispute}
                   productName={productName}
                   buyerName={buyerName}
@@ -345,7 +350,11 @@ export default function ProofGraphPage() {
                   feedback={feedback}
                 />
 
-                <AIClaimsPanel key={dispute.dispute_id} disputeId={dispute.dispute_id} />
+                <AIClaimsPanel
+                  key={`ai-claims-${dispute.dispute_id}`}
+                  disputeId={dispute.dispute_id}
+                  onExtractionComplete={() => fetchDisputeDetail(dispute.dispute_id, true)}
+                />
 
                 {/* Progressive disclosure: Evidence Graph, Audit Timeline, Diagnostics */}
                 <AdvancedWorkspace

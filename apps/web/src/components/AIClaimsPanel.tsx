@@ -24,7 +24,13 @@ type AIResponse = {
 };
 
 /** Model output is shown only as a source-grounded candidate, never as verified evidence. */
-export function AIClaimsPanel({ disputeId }: { disputeId: string }) {
+export function AIClaimsPanel({
+  disputeId,
+  onExtractionComplete,
+}: {
+  disputeId: string;
+  onExtractionComplete?: () => void;
+}) {
   const [result, setResult] = useState<AIResponse | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -45,7 +51,11 @@ export function AIClaimsPanel({ disputeId }: { disputeId: string }) {
           : "Model extraction could not be started. Investigation decisions are unchanged.");
         return;
       }
-      setResult((await response.json()) as AIResponse);
+      const data = (await response.json()) as AIResponse;
+      setResult(data);
+      if (onExtractionComplete && (data.status === "MODEL_SUCCESS" || data.status === "MODEL_PARTIAL")) {
+        onExtractionComplete();
+      }
     } catch {
       setError("Model extraction request failed. The deterministic investigation remains available.");
     } finally {
@@ -112,8 +122,7 @@ export function AIClaimsPanel({ disputeId }: { disputeId: string }) {
           )}
           {result.claims.length > 0 && (
             <p className="text-slate-500">
-              Candidate claims have been recorded in the graph with unverified model provenance.
-              Refresh the case to inspect their source links in &ldquo;How we checked&rdquo;.
+              Candidate claims have been recorded in the graph with unverified model provenance and the case evidence graph has been updated.
             </p>
           )}
         </div>
