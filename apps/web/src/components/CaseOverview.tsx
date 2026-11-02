@@ -27,7 +27,7 @@ interface CaseOverviewProps {
   buyerName: string;
   onVerifyCarrier: () => Promise<void>;
   onSubmitTracking: (carrierName: string, trackingNumber: string, notes: string) => Promise<void>;
-  onUploadFile: (file: File) => Promise<void>;
+  onUploadFile: (file: File, actionId?: string) => Promise<void>;
   onOpenReviewModal: () => void;
   carrierVerifying: boolean;
   submitting: boolean;
@@ -137,7 +137,8 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
   const handleFileUpload = (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedFile) return;
-    onUploadFile(selectedFile);
+    const actionId = dispute.current_policy_decision?.chosen_action?.action_id || "act_merchant_listing";
+    onUploadFile(selectedFile, actionId);
   };
 
   return (
@@ -454,7 +455,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
                 </h3>
                 <p className="text-xs text-slate-600 mt-1 leading-relaxed">
                   Records have been gathered. A case summary is ready to share with the reviewer who will make the final decision.
-                  ProofGraph does not decide dispute outcomes.
+                  Prepared for review — not submitted to PayPal. ProofGraph does not decide dispute outcomes.
                 </p>
               </div>
               <button

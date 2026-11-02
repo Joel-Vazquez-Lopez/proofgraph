@@ -22,6 +22,7 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
+  FlaskConical,
 } from "lucide-react";
 
 export interface GraphNodeData {
@@ -147,29 +148,42 @@ export const EvidenceGraphView: React.FC<EvidenceGraphViewProps> = ({
           icon = <FileCheck2 className="w-3.5 h-3.5 text-sky-600" />;
         }
 
-        // Status badge colors
+        // Honest Provenance Badges: Never label synthetic fixtures or user uploads as independently verified
         const status = n.verification_status;
+        const origin = n.origin;
         let statusBadge = (
           <span className="flex items-center gap-1 text-[10px] font-semibold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-full">
             <Clock className="w-2.5 h-2.5" /> {status}
           </span>
         );
-        if (status === "VERIFIED") {
-          statusBadge = (
-            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
-              <CheckCircle2 className="w-2.5 h-2.5" /> Verified
-            </span>
-          );
-        } else if (status === "CONTRADICTED") {
+        if (status === "CONTRADICTED") {
           statusBadge = (
             <span className="flex items-center gap-1 text-[10px] font-bold text-rose-700 bg-rose-100 px-2 py-0.5 rounded-full animate-pulse">
               <AlertOctagon className="w-2.5 h-2.5" /> Contradiction
             </span>
           );
-        } else if (status === "UNVERIFIED") {
+        } else if (origin === "SYNTHETIC_FIXTURE") {
+          statusBadge = (
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-indigo-700 bg-indigo-50 border border-indigo-200/60 px-2 py-0.5 rounded-full">
+              <FlaskConical className="w-2.5 h-2.5" /> Simulated record
+            </span>
+          );
+        } else if (origin === "MODEL_INFERENCE") {
+          statusBadge = (
+            <span className="flex items-center gap-1 text-[10px] font-semibold text-purple-700 bg-purple-50 border border-purple-200/60 px-2 py-0.5 rounded-full">
+              <Sparkles className="w-2.5 h-2.5" /> AI hypothesis
+            </span>
+          );
+        } else if (origin === "USER_SUBMITTED" || status === "UNVERIFIED") {
           statusBadge = (
             <span className="flex items-center gap-1 text-[10px] font-semibold text-amber-700 bg-amber-100/80 px-2 py-0.5 rounded-full">
               <Clock className="w-2.5 h-2.5" /> Unverified
+            </span>
+          );
+        } else if (status === "VERIFIED" && origin === "VERIFIED_EXTERNAL") {
+          statusBadge = (
+            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
+              <CheckCircle2 className="w-2.5 h-2.5" /> Verified external
             </span>
           );
         }
@@ -180,11 +194,20 @@ export const EvidenceGraphView: React.FC<EvidenceGraphViewProps> = ({
           data: {
             label: (
               <div
+                tabIndex={0}
+                role="button"
+                aria-label={`Evidence node: ${n.label}`}
                 onClick={() => onSelectNode && onSelectNode(n)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    onSelectNode && onSelectNode(n);
+                  }
+                }}
                 className={`w-[290px] rounded-xl border bg-white shadow-sm transition-all duration-150 cursor-pointer text-left overflow-hidden ${borderClass} ${
                   isSelected
                     ? "ring-2 ring-blue-600 shadow-md scale-[1.02]"
-                    : "hover:shadow-md hover:-translate-y-0.5"
+                    : "hover:shadow-md hover:-translate-y-0.5 focus:ring-2 focus:ring-blue-500"
                 }`}
               >
                 {/* Header row */}
