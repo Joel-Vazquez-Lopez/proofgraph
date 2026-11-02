@@ -73,8 +73,13 @@ _CAPABILITIES = (
 
 
 def _attempted(graph: EvidenceGraph) -> FrozenSet[str]:
+    answered_q_ids = {
+        e.target_id for e in graph.to_data().edges if e.type == EdgeType.ANSWERS
+    }
     attempted = set()
     for question in graph.get_nodes_by_type(NodeType.QUESTION):
+        if question.content.get("action_status") == "RECOMMENDED" and question.id not in answered_q_ids:
+            continue
         action = question.content.get("action")
         if isinstance(action, dict) and isinstance(action.get("action_id"), str):
             attempted.add(action["action_id"])

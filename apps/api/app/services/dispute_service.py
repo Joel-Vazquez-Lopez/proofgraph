@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from packages.shared_schemas.models import (
     DisputeCategory,
     ActionType,
+    ActionLifecycleStatus,
     InvestigationState,
     DataSourceType,
     NodeType,
@@ -105,7 +106,14 @@ class DisputeService:
             readiness = json.loads(c.readiness_json or "{}")
             graph_data = json.loads(c.graph_json or "{}")
             nodes = graph_data.get("nodes", [])
-            open_q = len([n for n in nodes if n.get("type") == NodeType.QUESTION.value])
+            edges = graph_data.get("edges", [])
+            answered_q_ids = {
+                e.get("target_id") for e in edges if e.get("type") == EdgeType.ANSWERS.value
+            }
+            open_q = len([
+                n for n in nodes
+                if n.get("type") == NodeType.QUESTION.value and n.get("id") not in answered_q_ids
+            ])
             order_node = next((n for n in nodes if n.get("type") == NodeType.ORDER.value), None)
             item_name = order_node.get("content", {}).get("item_name") if order_node else None
             buyer_name = self._format_buyer_name(c.buyer_id)
@@ -302,6 +310,7 @@ class DisputeService:
                         provenance=f"Merchant provided tracking identifier: {tracking_clean}"
                     )
                     edges_created.append(edge_ans.id)
+                    q.content["action_status"] = ActionLifecycleStatus.SUBMITTED.value
 
             # 2. Independent Carrier Verification Gate:
             # A tracking number alone NEVER establishes delivery.
@@ -341,6 +350,7 @@ class DisputeService:
                             "Submitted file responds to requested action; content remains unverified."
                         )
                         edges_created.append(edge.id)
+                        q.content["action_status"] = ActionLifecycleStatus.SUBMITTED.value
 
         # Run Decision-Readiness Evaluator
         readiness = DecisionReadinessEvaluator.evaluate(DisputeCategory(case.category), graph)
@@ -728,7 +738,10 @@ class DisputeService:
                 q_node = graph.add_node(
                     node_type=NodeType.QUESTION,
                     label=policy_decision.chosen_action.title,
-                    content={"action": policy_decision.chosen_action.model_dump()},
+                    content={
+                        "action": policy_decision.chosen_action.model_dump(),
+                        "action_status": ActionLifecycleStatus.RECOMMENDED.value
+                    },
                     source="INVESTIGATION_ENGINE",
                     node_id=f"q_{policy_decision.chosen_action.action_id}",
                     origin=EvidenceOrigin.MODEL_INFERENCE,
