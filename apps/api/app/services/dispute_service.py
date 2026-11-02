@@ -3,7 +3,8 @@ import base64
 import hashlib
 import uuid
 from datetime import datetime, timezone
-from typing import List, Dict, Any, Optional
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple
 from sqlalchemy.orm import Session
 
 from packages.shared_schemas.models import (
@@ -184,6 +185,16 @@ class DisputeService:
         if not case:
             raise KeyError(f"Dispute {dispute_id} not found.")
 
+        # Issue #23: Reject empty/no-op submissions without false progress
+        has_file = any(value is not None for value in (
+            submission.file_data_base64, submission.file_name, submission.mime_type
+        ))
+        has_tracking = bool(submission.tracking_number and submission.carrier_name)
+        has_answers = bool(submission.answers and isinstance(submission.answers, dict) and len(submission.answers) > 0)
+
+        if not has_file and not has_tracking and not has_answers and not submission.verify_carrier_now:
+            raise ValueError("No evidence payload provided. Submission must include a file, carrier tracking, or structured answers.")
+
         previous_state = InvestigationState(case.state)
         current_state = previous_state
         # Transition to INVESTIGATING if currently AWAITING_EVIDENCE
@@ -201,9 +212,7 @@ class DisputeService:
 
         # JSON and multipart ingestion share the same decoded byte-size limit,
         # extension, detected signature, and declared MIME checks.
-        if any(value is not None for value in (
-            submission.file_data_base64, submission.file_name, submission.mime_type
-        )):
+        if has_file:
             if not all(value is not None for value in (
                 submission.file_data_base64, submission.file_name, submission.mime_type
             )):
@@ -217,6 +226,13 @@ class DisputeService:
                 mime_type=mime,
                 file_id=evidence_item_id
             )
+
+            # Issue #23: Durably store raw file bytes
+            upload_base = Path(settings.UPLOAD_DIR) / dispute_id
+            upload_base.mkdir(parents=True, exist_ok=True)
+            stored_file_path = upload_base / f"{evidence_item_id}_{safe_name}"
+            stored_file_path.write_bytes(file_bytes)
+
             # Add EVIDENCE_ITEM node
             ev_node = graph.add_node(
                 node_type=NodeType.EVIDENCE_ITEM,
@@ -225,6 +241,8 @@ class DisputeService:
                     "file_name": safe_name,
                     "mime_type": mime,
                     "sha256": integrity_finding.sha256_hash,
+                    "file_size_bytes": len(file_bytes),
+                    "storage_path": str(stored_file_path),
                     "status": integrity_finding.integrity_status.value,
                     "action_id": submission.action_id,
                     # A submitted listing is evidence for comparison, NOT proof
@@ -250,6 +268,33 @@ class DisputeService:
                 metadata={"integrity": integrity_finding.model_dump()}
             )
             nodes_created.append(ev_node.id)
+
+        # Issue #23: Process supported structured answers
+        if has_answers:
+            answers_node_id = f"ans_{uuid.uuid4().hex[:8]}"
+            ans_node = graph.add_node(
+                node_type=NodeType.EVIDENCE_ITEM,
+                label=f"Submitted Answers ({len(submission.answers)} fields)",
+                content={
+                    "answers": submission.answers,
+                    "action_id": submission.action_id,
+                    "kind": "structured_answers",
+                },
+                source=f"{submission.submitter_role}_ANSWERS",
+                origin=EvidenceOrigin.USER_SUBMITTED,
+                verification_status=EvidenceVerificationStatus.UNVERIFIED,
+                node_id=answers_node_id,
+            )
+            nodes_created.append(ans_node.id)
+            if submission.action_id:
+                for q in graph.get_open_questions():
+                    action = q.content.get("action", {})
+                    if isinstance(action, dict) and action.get("action_id") == submission.action_id:
+                        edge = graph.add_edge(
+                            ans_node.id, q.id, EdgeType.ANSWERS,
+                            "User provided structured responses answering the requested action."
+                        )
+                        edges_created.append(edge.id)
 
         # Handle carrier tracking submission
         if submission.tracking_number and submission.carrier_name:
@@ -766,3 +811,53 @@ class DisputeService:
             self.db.add(db_case)
 
         self.db.commit()
+
+    def get_evidence_file(self, dispute_id: str, evidence_id: str) -> Tuple[bytes, str, str, str]:
+        """
+        Retrieves durable original file bytes for an ingested evidence item.
+        Returns: (file_bytes, mime_type, file_name, sha256_hash)
+        """
+        case = self.db.query(DisputeCaseDB).filter(DisputeCaseDB.dispute_id == dispute_id).first()
+        if not case:
+            raise KeyError(f"Dispute {dispute_id} not found.")
+
+        graph_dict = json.loads(case.graph_json or '{"nodes":[],"edges":[]}')
+        graph = EvidenceGraph.from_data(dispute_id, graph_dict)
+
+        node = graph.get_node(evidence_id)
+        if not node:
+            node = next(
+                (n for n in graph.get_nodes_by_type(NodeType.EVIDENCE_ITEM)
+                 if n.id == evidence_id or n.content.get("file_id") == evidence_id),
+                None
+            )
+        if not node:
+            raise KeyError(f"Evidence item '{evidence_id}' not found in dispute '{dispute_id}'.")
+
+        content = node.content or {}
+        sha256_expected = content.get("sha256")
+        mime_type = content.get("mime_type", "application/octet-stream")
+        file_name = content.get("file_name", "evidence_file")
+        storage_path_str = content.get("storage_path")
+
+        storage_path = None
+        if storage_path_str and Path(storage_path_str).exists():
+            storage_path = Path(storage_path_str)
+        else:
+            upload_dir = Path(settings.UPLOAD_DIR) / dispute_id
+            if upload_dir.exists():
+                matched = list(upload_dir.glob(f"{evidence_id}_*"))
+                if matched:
+                    storage_path = matched[0]
+
+        if not storage_path or not storage_path.exists():
+            raise FileNotFoundError(f"Original evidence file for '{evidence_id}' not found on disk.")
+
+        file_bytes = storage_path.read_bytes()
+        calculated_sha = hashlib.sha256(file_bytes).hexdigest()
+        if sha256_expected and calculated_sha.lower() != sha256_expected.lower():
+            raise ValueError(
+                f"Integrity check failed on retrieval: expected SHA-256 {sha256_expected}, got {calculated_sha}"
+            )
+
+        return file_bytes, mime_type, file_name, calculated_sha

@@ -11,6 +11,7 @@ from typing import Optional
 from fastapi import Header, HTTPException, status, Depends
 from sqlalchemy.orm import Session
 
+from app.config import settings
 from app.models.db_models import get_db, DisputeCaseDB
 
 
@@ -31,11 +32,34 @@ class AuthContext:
 def get_current_user(
     x_user_role: Optional[str] = Header(None, alias="X-User-Role"),
     x_user_id: Optional[str] = Header(None, alias="X-User-Id"),
+    authorization: Optional[str] = Header(None, alias="Authorization"),
 ) -> AuthContext:
     """
-    Extracts current authenticated identity and role from headers.
-    Defaults to REVIEWER role in demo mode when headers are absent to facilitate interactive evaluation.
+    Extracts current authenticated identity and role.
+    In DEMO_MODE:
+      Defaults to REVIEWER role when headers are absent to facilitate interactive evaluation.
+    In non-demo mode (DEMO_MODE=False):
+      Deny-by-default: requires valid Authorization Bearer token matching DEMO_AUTH_SECRET.
+      Unauthenticated requests or untrusted role headers are rejected with 401.
     """
+    if not settings.DEMO_MODE:
+        if not authorization:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Authentication required: DEMO_MODE is disabled."
+            )
+        if not settings.DEMO_AUTH_SECRET:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Non-demo mode requires configured DEMO_AUTH_SECRET credentials."
+            )
+        expected_bearer = f"Bearer {settings.DEMO_AUTH_SECRET}"
+        if authorization.strip() != expected_bearer:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authorization token in non-demo mode."
+            )
+
     role_str = (x_user_role or "REVIEWER").upper().strip()
     try:
         role = UserRole(role_str)
@@ -46,7 +70,26 @@ def get_current_user(
         )
 
     user_id = (x_user_id or "reviewer_demo_user").strip()
-    return AuthContext(user_id=user_id, role=role)
+    return AuthContext(user_id=user_id, role=role, is_demo_mode=settings.DEMO_MODE)
+
+
+def enforce_submitter_role(auth: AuthContext, declared_role: Optional[str]) -> str:
+    """
+    Ensures that an authenticated BUYER or MERCHANT cannot spoof a different submitter role.
+    REVIEWER and SYSTEM_ADMIN may submit on behalf of parties in demonstration workflows.
+    """
+    clean_declared = (declared_role or "").upper().strip()
+    if auth.role == UserRole.MERCHANT and clean_declared and clean_declared != UserRole.MERCHANT.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Authenticated Merchant cannot submit evidence as '{clean_declared}'."
+        )
+    if auth.role == UserRole.BUYER and clean_declared and clean_declared != UserRole.BUYER.value:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Authenticated Buyer cannot submit evidence as '{clean_declared}'."
+        )
+    return clean_declared or auth.role.value
 
 
 def verify_case_access(

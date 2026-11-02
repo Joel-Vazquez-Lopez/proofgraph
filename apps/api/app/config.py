@@ -41,6 +41,8 @@ class Settings(BaseModel):
     
     # Demo and Synthetic Flags
     ENABLE_SYNTHETIC_SCENARIOS: bool = True
+    DEMO_MODE: bool = os.getenv("DEMO_MODE", "true").lower() in ("true", "1", "yes")
+    DEMO_AUTH_SECRET: str = os.getenv("DEMO_AUTH_SECRET", "")
 
 
 settings = Settings()
