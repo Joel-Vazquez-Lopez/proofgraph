@@ -72,9 +72,16 @@ class HeuristicNBEPolicy(NextBestEvidencePolicy):
                 timestamp=datetime.now(timezone.utc).isoformat(),
             )
 
-        # Collect already attempted action IDs to prevent infinite loops
+        # Collect already attempted action IDs to prevent infinite loops.
+        # An action that is only RECOMMENDED (and unanswered) is not yet attempted.
+        answered_q_ids = {
+            e.target_id for e in graph.to_data().edges if e.type == EdgeType.ANSWERS
+        }
         attempted_actions = set()
         for q in graph.get_nodes_by_type(NodeType.QUESTION):
+            action_status = q.content.get("action_status")
+            if action_status == "RECOMMENDED" and q.id not in answered_q_ids:
+                continue
             action_data = q.content.get("action")
             if isinstance(action_data, dict) and "action_id" in action_data:
                 attempted_actions.add(action_data["action_id"])
