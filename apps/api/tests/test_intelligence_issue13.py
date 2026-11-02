@@ -339,7 +339,9 @@ def test_late_contradiction_reopens_decision_ready_case_for_review(client):
 
     # Existing evidence intake reevaluates graph and must reopen review.
     new_submission = tc.post(f"/api/v1/disputes/{case_id}/evidence", json={
-        "submitter_role": "BUYER", "notes": "Request review of conflicting listing",
+        "submitter_role": "BUYER",
+        "notes": "Request review of conflicting listing",
+        "answers": {"clarification": "Buyer notes condition contradiction with listing"},
     })
     assert new_submission.status_code == 200, new_submission.text
     assert new_submission.json()["previous_state"] == "DECISION_READY"
