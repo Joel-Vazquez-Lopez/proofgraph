@@ -1,6 +1,6 @@
 import json
 from datetime import datetime, timezone
-from sqlalchemy import Column, String, Float, Text, Boolean, Integer, DateTime
+from sqlalchemy import Column, String, Float, Text, Boolean, Integer, DateTime, event
 from sqlalchemy.orm import declarative_base, sessionmaker
 from sqlalchemy import create_engine
 from app.config import settings
@@ -80,8 +80,19 @@ class EvidenceItemDB(Base):
 
 
 # Database engine and session factory
-connect_args = {"check_same_thread": False} if settings.DATABASE_URL.startswith("sqlite") else {}
+connect_args = {"check_same_thread": False, "timeout": 30.0} if settings.DATABASE_URL.startswith("sqlite") else {}
 engine = create_engine(settings.DATABASE_URL, connect_args=connect_args)
+
+
+@event.listens_for(engine, "connect")
+def set_sqlite_pragma(dbapi_connection, connection_record):
+    if settings.DATABASE_URL.startswith("sqlite"):
+        cursor = dbapi_connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA busy_timeout=30000")
+        cursor.close()
+
+
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 
