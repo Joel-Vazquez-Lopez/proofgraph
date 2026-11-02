@@ -9,7 +9,7 @@ services:
     ports:
       - "8000:8000"
     environment:
-      - DATABASE_URL=sqlite:///./paypal_disputes.db
+      - DATABASE_URL=sqlite:////app/storage/paypal_disputes.db
       - PAYPAL_ENVIRONMENT=sandbox
       - PAYPAL_CLIENT_ID=${PAYPAL_CLIENT_ID:-}
       - PAYPAL_CLIENT_SECRET=${PAYPAL_CLIENT_SECRET:-}
@@ -30,5 +30,6 @@ services:
       - "3000:3000"
     environment:
       - NODE_ENV=production
+      - API_INTERNAL_URL=http://api:8000
     depends_on:
       - api
