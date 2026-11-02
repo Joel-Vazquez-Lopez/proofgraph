@@ -139,17 +139,19 @@ export default function ProofGraphPage() {
     }
   }, []);
 
-  const fetchDisputeDetail = useCallback(async (id: string) => {
+  const fetchDisputeDetail = useCallback(async (id: string, silent = false) => {
     if (!id || activeCaseRef.current !== id) return;
     const request = ++detailRequestRef.current;
     detailAbortRef.current?.abort();
     const controller = new AbortController();
     detailAbortRef.current = controller;
-    setLoadingDetail(true);
-    setDetailError(null);
-    setDispute(null); // Never display an old case while fetching another.
-    setSelectedNode(null);
-    setShowReviewModal(false);
+    if (!silent) {
+      setLoadingDetail(true);
+      setDetailError(null);
+      setDispute(null); // Never display an old case while fetching another.
+      setSelectedNode(null);
+      setShowReviewModal(false);
+    }
     try {
       const res = await fetch(`/api/v1/disputes/${encodeURIComponent(id)}`, { signal: controller.signal });
       if (!res.ok) throw new Error(await getResponseError(res, "Could not load case details"));
@@ -351,7 +353,7 @@ export default function ProofGraphPage() {
                 <AIClaimsPanel
                   key={`ai-claims-${dispute.dispute_id}`}
                   disputeId={dispute.dispute_id}
-                  onExtractionComplete={() => fetchDisputeDetail(dispute.dispute_id)}
+                  onExtractionComplete={() => fetchDisputeDetail(dispute.dispute_id, true)}
                 />
 
                 {/* Progressive disclosure: Evidence Graph, Audit Timeline, Diagnostics */}
