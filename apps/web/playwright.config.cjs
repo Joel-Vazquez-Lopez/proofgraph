@@ -18,7 +18,7 @@ module.exports = {
   },
   webServer: [
     {
-      command: "../api/.venv/bin/python -m uvicorn app.main:app --app-dir ../api --host 127.0.0.1 --port 8001",
+      command: `${process.env.CI ? "python" : "../api/.venv/bin/python"} -m uvicorn app.main:app --app-dir ../api --host 127.0.0.1 --port 8001`,
       url: "http://127.0.0.1:8001/api/v1/health",
       env: {
         ...process.env,

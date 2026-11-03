@@ -57,6 +57,24 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+@app.middleware("http")
+async def public_read_only_guard(request, call_next):
+    from fastapi.responses import JSONResponse
+
+    if (
+        os.getenv("PUBLIC_READ_ONLY", "false").lower() == "true"
+        and request.method.upper() not in ("GET", "HEAD", "OPTIONS")
+    ):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "detail": "This public showcase is read-only. Evidence submission and AI extraction are available in the interactive local demo."
+            },
+        )
+
+    return await call_next(request)
+
+
 # Mount Routers
 app.include_router(health_router, prefix=settings.API_V1_PREFIX)
 app.include_router(disputes_router, prefix=settings.API_V1_PREFIX)
