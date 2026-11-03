@@ -61,10 +61,10 @@ def test_end_to_end_inr_investigation_slice(client):
     Vertical slice test demonstrating the full Phase 2 evidence provenance lifecycle:
     1. Case PP-D-INR-8841 starts in AWAITING_EVIDENCE (missing tracking).
     2. Merchant submits tracking — ingested as USER_SUBMITTED / UNVERIFIED.
-    3. Independent carrier verification executes via /verify-carrier.
-    4. Carrier reports DELIVERED (no signature) + buyer has non-receipt claim →
+    3. A simulated carrier fixture lookup executes via /verify-carrier.
+    4. Fixture reports DELIVERED (no signature) + buyer has non-receipt claim →
        Scenario A: case moves to INVESTIGATING with open delivery question.
-    5. Verified carrier observation node is present with SYNTHETIC_FIXTURE origin.
+    5. The simulated observation is explicitly scoped as SIMULATED_FIXTURE.
     6. Report is generated (reflects current state).
     """
     # 1. Verify initial state
@@ -99,7 +99,7 @@ def test_end_to_end_inr_investigation_slice(client):
     assert shipment_nodes[0]["origin"] == "USER_SUBMITTED"
     assert shipment_nodes[0]["verification_status"] == "UNVERIFIED"
 
-    # 3. Trigger explicit independent carrier verification
+    # 3. Trigger explicitly simulated carrier fixture lookup
     resp_verify = client.post("/api/v1/disputes/PP-D-INR-8841/verify-carrier")
     assert resp_verify.status_code == 200
     result_verified = resp_verify.json()
@@ -113,7 +113,7 @@ def test_end_to_end_inr_investigation_slice(client):
     missing_reqs = result_verified["readiness"]["missing_requirements"]
     assert any("buyer" in m.lower() and "non-receipt" in m.lower() for m in missing_reqs)
 
-    # 5. Check updated dispute detail — carrier observation is verified with SYNTHETIC_FIXTURE origin
+    # 5. Check updated dispute detail — fixture observation is not an external verification
     resp3 = client.get("/api/v1/disputes/PP-D-INR-8841")
     assert resp3.status_code == 200
     updated_detail = resp3.json()
@@ -121,15 +121,20 @@ def test_end_to_end_inr_investigation_slice(client):
 
     obs_nodes = [n for n in updated_detail["evidence_graph"]["nodes"] if n["type"] == "OBSERVATION"]
     assert len(obs_nodes) >= 1
-    assert obs_nodes[0]["verification_status"] == "VERIFIED"
+    assert obs_nodes[0]["verification_status"] == "VERIFIED"  # fixture scenario truth only
     assert obs_nodes[0]["origin"] == "SYNTHETIC_FIXTURE"
+    assert obs_nodes[0]["metadata"]["verification_scope"] == "SIMULATED_FIXTURE"
+    assert obs_nodes[0]["metadata"]["independently_verified"] is False
+    assert obs_nodes[0]["verified_at"] is None
 
     # 6. Report is generated reflecting current investigative state
     resp_report = client.get("/api/v1/disputes/PP-D-INR-8841/report")
     assert resp_report.status_code == 200
     report = resp_report.json()
     assert report["dispute_id"] == "PP-D-INR-8841"
-    assert len(report["verified_facts"]) >= 1
+    assert report["verified_facts"] == []
+    assert len(report["simulated_facts"]) >= 1
+    assert all("SIMULATED" in fact for fact in report["simulated_facts"])
 
     # Markdown report is generated
     resp_md = client.get("/api/v1/disputes/PP-D-INR-8841/report/markdown")

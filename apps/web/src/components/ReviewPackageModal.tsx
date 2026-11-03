@@ -1,20 +1,14 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Check, Clock, Copy, Download, FileText, Scale, X } from "lucide-react";
 import {
-  CheckCircle2,
-  AlertTriangle,
-  FileText,
-  Download,
-  Copy,
-  Check,
-  X,
-  ShieldCheck,
-  Clock,
-  ArrowRight,
-  Scale,
-  Sparkles,
-} from "lucide-react";
+  evidenceEntries,
+  generateReviewMarkdown,
+  humanizeRequirement,
+  investigationSummary,
+  HUMAN_REVIEW_NOTICE,
+} from "@/lib/investigation-report.mjs";
 
 interface ReviewPackageModalProps {
   isOpen: boolean;
@@ -25,267 +19,201 @@ interface ReviewPackageModalProps {
 }
 
 export const ReviewPackageModal: React.FC<ReviewPackageModalProps> = ({
-  isOpen,
-  onClose,
-  dispute,
-  productName,
-  buyerName,
+  isOpen, onClose, dispute, productName, buyerName,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [copyError, setCopyError] = useState<string | null>(null);
+  const closeRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocused = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    previouslyFocused.current = document.activeElement as HTMLElement | null;
+    closeRef.current?.focus();
+    return () => previouslyFocused.current?.focus();
+  }, [isOpen]);
 
   if (!isOpen || !dispute) return null;
 
-  const isReady = dispute.readiness?.is_decision_ready || dispute.is_decision_ready;
-  const satisfiedReqs = dispute.readiness?.satisfied_requirements || [];
-  const missingReqs = dispute.readiness?.missing_requirements || [];
-  const contradictions = dispute.readiness?.active_contradictions || [];
+  const { isReady, requirements, missing, contradictions, evidence } = investigationSummary(dispute);
 
-  // Generate markdown report for export
-  const generateMarkdownReport = (): string => {
-    return `# ProofGraph Dispute Investigation Summary
-**Case ID**: ${dispute.dispute_id}
-**Transaction ID**: ${dispute.transaction_id || "N/A"}
-**Product**: ${productName}
-**Amount**: $${dispute.amount.toFixed(2)} ${dispute.currency}
-**Buyer**: ${buyerName} (${dispute.buyer_id})
-**Seller**: ${dispute.seller_id}
-**Status**: ${isReady ? "READY FOR REVIEW" : "IN PROGRESS"}
-**Date Generated**: ${new Date().toISOString()}
-
----
-
-## 1. What Happened
-- **Buyer Claim**: "${dispute.buyer_claim || "Item not received"}"
-- **Seller Response**: "${dispute.seller_response || "Tracking and fulfillment records provided."}"
-
----
-
-## 2. Established & Verified Facts
-${satisfiedReqs.length > 0
-  ? satisfiedReqs.map((req: string) => `- [x] ${req.replace(/_/g, " ")}: Verified`).join("\n")
-  : "- Order placement and payment verified on ledger"}
-
----
-
-## 3. Outstanding Questions & Discrepancies
-${contradictions.length > 0
-  ? contradictions.map((c: string) => `- [!] CONTRADICTION: ${c}`).join("\n")
-  : "- None detected; facts are mutually consistent"}
-${missingReqs.length > 0
-  ? missingReqs.map((m: string) => `- [ ] Missing requirement: ${m.replace(/_/g, " ")}`).join("\n")
-  : ""}
-
----
-
-## 4. Policy & Audit Integrity
-- **Engine Recommendation**: ${dispute.readiness?.recommended_state || dispute.state}
-- **Rationale**: ${dispute.readiness?.rationale || "All required evidentiary standards met."}
-- **Total Evidence Nodes**: ${dispute.evidence_graph?.nodes?.length || 0}
-- **Total Audited Steps**: ${dispute.timeline?.length || 0}
-
----
-
-> **Notice**: ProofGraph is an evidence-assembly and verification system. It does not decide dispute outcomes or move funds. All decisions are rendered by authorized human adjudicators.
-`;
-  };
-
-  const handleCopy = () => {
-    navigator.clipboard.writeText(generateMarkdownReport());
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = async () => {
+    try {
+      await navigator.clipboard.writeText(generateReviewMarkdown(dispute, productName, buyerName));
+      setCopied(true);
+      setCopyError(null);
+    } catch {
+      setCopyError("Unable to copy automatically. Use Download case summary instead.");
+    }
   };
 
   const handleDownload = () => {
-    const report = generateMarkdownReport();
-    const blob = new Blob([report], { type: "text/markdown;charset=utf-8" });
+    const blob = new Blob([generateReviewMarkdown(dispute, productName, buyerName)], { type: "text/markdown;charset=utf-8" });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.href = url;
     link.download = `proofgraph-case-${dispute.dispute_id}.md`;
     document.body.appendChild(link);
     link.click();
-    document.body.removeChild(link);
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
+  const handleDialogKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") {
+      e.stopPropagation();
+      onClose();
+    }
+    if (e.key !== "Tab") return;
+    const focusable = Array.from(
+      e.currentTarget.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), a[href], input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+    );
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault();
+      last.focus();
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault();
+      first.focus();
+    }
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6 animate-in fade-in duration-200">
-      <div className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]">
-        {/* Header */}
-        <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-gradient-to-r from-slate-50 via-white to-slate-50">
-          <div className="flex items-center gap-3">
-            <div className={`w-10 h-10 rounded-2xl flex items-center justify-center ${
-              isReady ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"
-            }`}>
-              {isReady ? <ShieldCheck className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-bold text-slate-900">
-                  Case Review Package
-                </h3>
-                <span className={`text-[11px] font-bold px-2 py-0.5 rounded-full ${
-                  isReady ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"
-                }`}>
-                  {isReady ? "Ready for Review" : "In Progress"}
-                </span>
-              </div>
-              <p className="text-xs text-slate-500">
-                Case {dispute.dispute_id} • {productName} (${dispute.amount.toFixed(2)} {dispute.currency})
-              </p>
-            </div>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 sm:p-6">
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="review-package-title"
+        onKeyDown={handleDialogKeyDown}
+        className="bg-white rounded-3xl max-w-3xl w-full shadow-2xl border border-slate-200 overflow-hidden flex flex-col max-h-[90vh]"
+      >
+        <div className="px-5 sm:px-6 py-5 border-b border-slate-100 flex items-start justify-between gap-3 bg-slate-50">
+          <div>
+            <h3 id="review-package-title" className="text-base font-bold text-slate-900">Case review package</h3>
+            <p className="text-xs text-slate-500 mt-1">
+              Case {dispute.dispute_id} · {productName} · {dispute.amount} {dispute.currency}
+            </p>
+            <p className="text-xs font-semibold text-slate-700 mt-1">
+              {isReady ? "Ready for human review" : "Investigation in progress"}
+            </p>
           </div>
-
-          <button
-            onClick={onClose}
-            className="p-2 rounded-xl text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition-colors"
-          >
+          <button ref={closeRef} type="button" onClick={onClose} aria-label="Close review package"
+            className="p-2 rounded-xl text-slate-600 hover:text-slate-900 hover:bg-slate-200 focus-visible:ring-2 focus-visible:ring-blue-600">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        {/* Scrollable Body */}
-        <div className="p-6 overflow-y-auto space-y-6 text-sm">
-          {/* Main Status Headline */}
-          <div className={`p-4 rounded-2xl border ${
-            isReady
-              ? "bg-emerald-50/80 border-emerald-200/80 text-emerald-950"
-              : "bg-amber-50/80 border-amber-200/80 text-amber-950"
-          }`}>
-            <div className="flex items-start gap-3">
-              {isReady ? (
-                <CheckCircle2 className="w-5 h-5 text-emerald-600 mt-0.5 shrink-0" />
-              ) : (
-                <Clock className="w-5 h-5 text-amber-600 mt-0.5 shrink-0" />
-              )}
-              <div>
-                <h4 className="font-bold text-sm">
-                  {isReady
-                    ? "This case is ready for a human reviewer."
-                    : "Still gathering records — not yet ready for review."}
-                </h4>
-                <p className="text-xs mt-1 leading-relaxed opacity-90">
-                  {isReady
-                    ? "The available records have been gathered and checked against our demonstration data. A human reviewer will make the final decision. ProofGraph does not decide dispute outcomes."
-                    : "Some records or clarifications are still needed before this case can be sent for review."}
-                </p>
-              </div>
-            </div>
+        <div className="p-5 sm:p-6 overflow-y-auto space-y-6 text-sm">
+          <div className="p-4 rounded-2xl border border-blue-200 bg-blue-50 text-blue-950">
+            <h4 className="font-bold text-sm">{isReady ? "Ready for a reviewer, not automatically resolved" : "More information or review may be needed"}</h4>
+            <p className="text-xs mt-1 leading-relaxed">
+              Readiness means the evaluator's requirements are met. It does not prove that individual records are authentic or independently verified.
+            </p>
           </div>
 
-          {/* Factual Summary: What happened */}
-          <div>
-            <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2.5">
-              What happened
+          <section aria-labelledby="statements-heading">
+            <h4 id="statements-heading" className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">What happened — reported statements</h4>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                <p className="text-[11px] font-bold text-slate-600 uppercase">Customer: {buyerName}</p>
+                <p className="text-xs text-slate-800 mt-1">{dispute.buyer_claim || "No customer statement recorded."}</p>
+              </div>
+              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200">
+                <p className="text-[11px] font-bold text-slate-600 uppercase">Merchant statement</p>
+                <p className="text-xs text-slate-800 mt-1">{dispute.seller_response || "No merchant statement recorded."}</p>
+              </div>
+            </div>
+          </section>
+
+          <section aria-labelledby="evidence-heading">
+            <h4 id="evidence-heading" className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+              Evidence on file and where it comes from
             </h4>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-bold text-slate-500 uppercase">Customer statement</span>
-                <p className="text-xs text-slate-800 font-medium mt-1">
-                  "{dispute.buyer_claim || "Buyer claims item did not arrive."}"
-                </p>
-                <p className="text-[11px] text-slate-500 mt-2">
-                  Reported by: {buyerName}
-                </p>
-              </div>
-
-              <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80">
-                <span className="text-[11px] font-bold text-slate-500 uppercase">Merchant record</span>
-                <p className="text-xs text-slate-800 font-medium mt-1">
-                  "{dispute.seller_response || "Tracking and order records provided."}"
-                </p>
-                <p className="text-[11px] text-slate-500 mt-2">
-                  Seller: {dispute.seller_id}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* On record vs Open questions */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div>
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" /> On record
-              </h4>
+            <p className="text-xs text-slate-600 mb-3">
+              Source labels distinguish simulation, submitted records, inferences and independently verified evidence.
+            </p>
+            {evidence.length ? (
               <ul className="space-y-2">
-                <li className="flex items-start gap-2 text-xs text-slate-700 bg-slate-50 p-2.5 rounded-xl border border-slate-200/60">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
-                  <span>Order placed and ${dispute.amount.toFixed(2)} paid via PayPal</span>
-                </li>
-                {satisfiedReqs.map((req: string, idx: number) => (
-                  <li key={idx} className="flex items-start gap-2 text-xs text-slate-700 bg-slate-50 p-2.5 rounded-xl border border-slate-200/60">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
-                    <span>{req.replace(/_/g, " ")}</span>
+                {evidence.map((record: any, index: number) => (
+                  <li key={record.id || index} className="bg-slate-50 border border-slate-200 rounded-xl p-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="text-xs font-semibold text-slate-900">{record.title}</p>
+                      <span className={`px-2 py-0.5 rounded-full border text-[10px] font-bold ${record.externallyVerified
+                        ? "bg-emerald-50 text-emerald-900 border-emerald-200"
+                        : "bg-amber-50 text-amber-900 border-amber-200"}`}>
+                        {record.label}
+                      </span>
+                    </div>
+                    <p className="text-[11px] text-slate-600 mt-1">{record.description}</p>
+                    <p className="text-[11px] text-slate-500 mt-1">Source: {record.source} · Verification: {record.verification}</p>
                   </li>
                 ))}
               </ul>
-            </div>
+            ) : <p className="text-xs text-slate-600 bg-slate-50 p-3 rounded-xl">No evidence items available for this case.</p>}
+          </section>
 
-            <div>
-              <h4 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2.5 flex items-center gap-1.5">
-                <AlertTriangle className="w-3.5 h-3.5 text-amber-600" /> Not yet confirmed
-              </h4>
-              <div className="space-y-2">
-                {contradictions.length > 0 ? (
-                  contradictions.map((c: string, idx: number) => (
-                    <div key={idx} className="flex items-start gap-2 text-xs text-rose-800 bg-rose-50 p-2.5 rounded-xl border border-rose-200">
-                      <AlertTriangle className="w-3.5 h-3.5 text-rose-600 mt-0.5 shrink-0" />
-                      <span><strong>These details don't match:</strong> {c}</span>
-                    </div>
-                  ))
-                ) : missingReqs.length > 0 ? (
-                  missingReqs.map((m: string, idx: number) => (
-                    <div key={idx} className="flex items-start gap-2 text-xs text-amber-800 bg-amber-50 p-2.5 rounded-xl border border-amber-200">
-                      <Clock className="w-3.5 h-3.5 text-amber-600 mt-0.5 shrink-0" />
-                      <span>Still needed: {m.replace(/_/g, " ")}</span>
-                    </div>
-                  ))
-                ) : (
-                  <div className="flex items-start gap-2 text-xs text-emerald-800 bg-emerald-50/50 p-2.5 rounded-xl border border-emerald-100">
-                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 mt-0.5 shrink-0" />
-                    <span>No open questions. All required records are in.</span>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+          <section aria-labelledby="requirements-heading">
+            <h4 id="requirements-heading" className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">
+              Evaluator requirements marked satisfied
+            </h4>
+            <p className="text-xs text-slate-600 mb-2">These are readiness checks, not independently verified facts.</p>
+            {requirements.length ? (
+              <ul className="space-y-1.5">{requirements.map((req: string, i: number) => (
+                <li key={i} className="text-xs bg-slate-50 border border-slate-200 rounded-lg p-2">{humanizeRequirement(req)}</li>
+              ))}</ul>
+            ) : <p className="text-xs text-slate-600">No satisfied requirements reported.</p>}
+          </section>
 
-          {/* Human authority notice */}
-          <div className="p-3.5 rounded-2xl bg-blue-50/80 border border-blue-200/80 text-blue-900 text-xs">
-            <div className="flex items-start gap-2.5">
-              <Scale className="w-4 h-4 text-blue-700 mt-0.5 shrink-0" />
-              <div>
-                <p className="font-bold">Decision by a human reviewer</p>
-                <p className="mt-0.5 text-blue-800/90 leading-relaxed">
-                  ProofGraph gathers and organizes records so a reviewer can make a fast, fair decision.
-                  <strong> The AI does not decide dispute outcomes or move funds.</strong> All outcomes require human authorization.
-                </p>
-              </div>
-            </div>
+          <section aria-labelledby="outstanding-heading">
+            <h4 id="outstanding-heading" className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-2">What remains unresolved</h4>
+            {contradictions.length > 0 && (
+              <ul className="space-y-2 mb-2">{contradictions.map((c: string, i: number) => (
+                <li key={i} className="flex gap-2 items-start bg-rose-50 border border-rose-200 rounded-lg p-3 text-xs text-rose-950">
+                  <AlertTriangle className="w-4 h-4 shrink-0" /><span>Conflicting evidence: {c}</span>
+                </li>
+              ))}</ul>
+            )}
+            {missing.length > 0 && (
+              <ul className="space-y-2">{missing.map((m: string, i: number) => (
+                <li key={i} className="flex gap-2 items-start bg-amber-50 border border-amber-200 rounded-lg p-3 text-xs text-amber-950">
+                  <Clock className="w-4 h-4 shrink-0" /><span>Still needed: {humanizeRequirement(m)}</span>
+                </li>
+              ))}</ul>
+            )}
+            {!contradictions.length && !missing.length && (
+              <p className="text-xs text-slate-600">The evaluator lists no open contradictions or missing requirements. This is not independent confirmation of all facts.</p>
+            )}
+          </section>
+
+          <section aria-labelledby="assessment-heading" className="bg-slate-50 rounded-xl border border-slate-200 p-3">
+            <h4 id="assessment-heading" className="text-xs font-bold text-slate-700 uppercase">Current assessment</h4>
+            <p className="text-xs text-slate-800 mt-1">{dispute.readiness?.rationale || "No assessment rationale available."}</p>
+            <p className="text-xs text-slate-500 mt-2">Recommended state: {dispute.readiness?.recommended_state || dispute.state || "Not supplied"}</p>
+          </section>
+
+          <div className="flex items-start gap-2.5 bg-blue-50 border border-blue-200 rounded-xl p-3.5 text-xs text-blue-950">
+            <Scale className="w-4 h-4 shrink-0" /><p>{HUMAN_REVIEW_NOTICE}</p>
           </div>
         </div>
 
-        <div className="px-6 py-4 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-3">
-          <div className="text-xs text-slate-500">
-            {dispute.evidence_graph?.nodes?.length || 0} evidence items • {dispute.timeline?.length || 0} recorded actions
-          </div>
-
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleCopy}
-              className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-2xs"
-            >
-              {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
-              <span>{copied ? "Copied" : "Copy summary"}</span>
+        <div className="px-5 sm:px-6 py-4 bg-slate-50 border-t border-slate-200 flex flex-wrap justify-between items-center gap-3">
+          <p className="text-[11px] text-slate-500">{evidence.length} evidence records · {dispute.timeline?.length || 0} activity events</p>
+          <div className="flex flex-wrap items-center gap-2">
+            <button type="button" onClick={handleCopy}
+              className="px-3 py-2 rounded-xl border border-slate-200 bg-white hover:bg-slate-100 text-slate-700 text-xs font-semibold flex items-center gap-1.5">
+              {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+              {copied ? "Copied" : "Copy summary"}
             </button>
-
-            <button
-              onClick={handleDownload}
-              className="px-4 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5 transition-colors shadow-xs"
-            >
-              <Download className="w-3.5 h-3.5" />
-              <span>Download case summary</span>
+            <button type="button" onClick={handleDownload}
+              className="px-3 py-2 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center gap-1.5">
+              <Download className="w-3.5 h-3.5" /> Download case summary
             </button>
           </div>
+          {copyError && <p role="alert" className="basis-full text-xs text-rose-700">{copyError}</p>}
         </div>
       </div>
     </div>

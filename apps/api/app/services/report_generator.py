@@ -8,6 +8,7 @@ from packages.shared_schemas.models import (
     NodeType,
     EdgeType,
     EvidenceVerificationStatus,
+    EvidenceOrigin,
 )
 from app.services.evidence_graph import EvidenceGraph
 
@@ -18,21 +19,43 @@ class ReportGenerator:
     ready for human dispute reviewers or PayPal adjudication.
     """
 
+    @staticmethod
+    def _is_independently_verified(node) -> bool:
+        if node.verification_status != EvidenceVerificationStatus.VERIFIED:
+            return False
+        # Never turn scenario truth into independent external evidence, including
+        # graphs stored before explicit verification_scope metadata was added.
+        if node.origin == EvidenceOrigin.SYNTHETIC_FIXTURE:
+            return False
+        if node.metadata.get("verification_scope") == "SIMULATED_FIXTURE":
+            return False
+        if node.origin == EvidenceOrigin.VERIFIED_EXTERNAL:
+            return True
+        # An explicitly audited user-submitted document may be corroborated
+        # without rewriting its original USER_SUBMITTED provenance.
+        return bool(node.verified_at and node.metadata.get("verification_audit"))
+
     @classmethod
     def generate_report(cls, dispute: DisputeDetail) -> InvestigationReport:
         graph = EvidenceGraph.from_data(dispute.dispute_id, dispute.evidence_graph)
 
-        # 1. Verified facts / observations
+        # 1. Separately inventory independently corroborated observations and
+        # demo fixture facts, including older seeded fixture observations.
         obs_nodes = graph.get_nodes_by_type(NodeType.OBSERVATION)
         verified_facts = [
             f"[{obs.source}] {obs.label}"
             for obs in obs_nodes
-            if obs.verification_status == EvidenceVerificationStatus.VERIFIED
+            if cls._is_independently_verified(obs)
+        ]
+        simulated_facts = [
+            f"[SIMULATED / {obs.source}] {obs.label}"
+            for obs in obs_nodes
+            if obs.origin == EvidenceOrigin.SYNTHETIC_FIXTURE
         ]
         if not verified_facts:
-            # Fallback to verified transactions and orders
+            # A synthetic VERIFIED transaction is still a scenario assumption.
             for tx in graph.get_nodes_by_type(NodeType.TRANSACTION):
-                if tx.verification_status == EvidenceVerificationStatus.VERIFIED:
+                if cls._is_independently_verified(tx):
                     verified_facts.append(f"[{tx.source}] {tx.label}")
 
         # 2. Unresolved questions
@@ -54,7 +77,15 @@ class ReportGenerator:
                 "type": node.type.value,
                 "label": node.label,
                 "source": node.source,
+                "origin": node.origin.value,
                 "verification_status": node.verification_status.value,
+                "verification_scope": node.metadata.get(
+                    "verification_scope",
+                    "SIMULATED_FIXTURE" if node.origin == EvidenceOrigin.SYNTHETIC_FIXTURE
+                    else "INDEPENDENT_EXTERNAL" if cls._is_independently_verified(node)
+                    else "UNVERIFIED",
+                ),
+                "independently_verified": cls._is_independently_verified(node),
                 "created_at": node.created_at,
             })
 
@@ -65,6 +96,11 @@ class ReportGenerator:
             f"Case {dispute.dispute_id} ({dispute.category.value}) is in state {status_label}. "
             f"Total disputed amount: {dispute.amount:.2f} {dispute.currency}. "
             f"{readiness_note}"
+            + (
+                " This is a synthetic demo case; fixture observations are simulated "
+                "and are not independently verified external facts."
+                if dispute.data_source.value == "SYNTHETIC_FIXTURE" else ""
+            )
         )
 
         return InvestigationReport(
@@ -76,6 +112,7 @@ class ReportGenerator:
             data_source=dispute.data_source,
             executive_summary=exec_summary,
             verified_facts=verified_facts,
+            simulated_facts=simulated_facts,
             unresolved_questions=unresolved_q_texts,
             identified_contradictions=contradiction_texts,
             missing_evidence_inventory=dispute.readiness.missing_requirements,
@@ -108,12 +145,20 @@ class ReportGenerator:
         md.append(f"- **Handoff Recommendation:** `{report.recommended_adjudication_handoff}`")
         md.append(f"- **Readiness Rationale:** {report.readiness_evaluation.rationale}\n")
 
-        md.append("## 3. Verified Factual Observations")
+        md.append("## 3. Independently Verified Factual Observations")
         if report.verified_facts:
             for fact in report.verified_facts:
                 md.append(f"- [x] {fact}")
         else:
-            md.append("*No fully verified observations recorded yet.*")
+            md.append("*No independently verified observations recorded yet.*")
+        md.append("")
+
+        md.append("## 3A. Simulated Demo Observations (NOT Externally Verified)")
+        if report.simulated_facts:
+            for fact in report.simulated_facts:
+                md.append(f"- [SIMULATED] {fact}")
+        else:
+            md.append("*No simulated carrier observations recorded.*")
         md.append("")
 
         md.append("## 4. Contradictions & Discrepancies")
@@ -142,10 +187,13 @@ class ReportGenerator:
             md.append("")
 
         md.append("## 7. Traceable Provenance Inventory")
-        md.append("| Node ID | Type | Label | Source | Verification |")
-        md.append("| :--- | :--- | :--- | :--- | :--- |")
+        md.append("| Node ID | Type | Label | Source | Origin | Verification | Scope |")
+        md.append("| :--- | :--- | :--- | :--- | :--- | :--- | :--- |")
         for p in report.evidence_provenance_trail:
-            md.append(f"| `{p['node_id']}` | {p['type']} | {p['label']} | {p['source']} | `{p['verification_status']}` |")
+            md.append(
+                f"| `{p['node_id']}` | {p['type']} | {p['label']} | {p['source']} | "
+                f"`{p['origin']}` | `{p['verification_status']}` | `{p['verification_scope']}` |"
+            )
         md.append("")
 
         md.append("---")

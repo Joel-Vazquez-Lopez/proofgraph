@@ -4,7 +4,8 @@ on:
   push:
     branches: [main, master]
   pull_request:
-    branches: [main, master]
+    # Validate phase branches regardless of which integration branch the PR targets.
+    branches: ["**"]
 
 jobs:
   backend-test:
@@ -27,6 +28,14 @@ jobs:
         run: |
           pytest -v
 
+      - name: Run Simulated Adaptive Investigation Demo
+        run: |
+          python benchmarks/demo_intelligence.py
+
+      - name: Run Independent Adaptive Policy Challenge
+        run: |
+          python benchmarks/evaluate_adaptive_nbe.py
+
       - name: Run Empirical Benchmark
         run: |
           python benchmarks/run_benchmark.py
@@ -46,6 +55,53 @@ jobs:
         working-directory: apps/web
         run: npm ci
 
+      - name: Run merchant investigation regression tests
+        working-directory: apps/web
+        run: npm test
+
       - name: Build Next.js application
         working-directory: apps/web
         run: npm run build
+
+  frontend-browser:
+    name: Merchant Browser Journey (Chromium)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install frontend dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Install Playwright test runner
+        working-directory: apps/web
+        run: npm install --no-save --package-lock=false @playwright/test@1.56.1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install FastAPI dependencies for real integration browser test
+        run: python -m pip install -r apps/api/requirements.txt
+
+      - name: Install Chromium
+        working-directory: apps/web
+        run: npx playwright install --with-deps chromium
+
+      - name: Run desktop, mobile, keyboard and error-state browser journeys
+        working-directory: apps/web
+        env:
+          CI: "true"
+        run: npx playwright test --config=playwright.config.cjs
+
+      - name: Upload browser traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: merchant-browser-traces
+          path: apps/web/test-results/
+          retention-days: 7

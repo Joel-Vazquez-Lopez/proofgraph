@@ -197,23 +197,37 @@ def _build_scenario_a() -> BenchmarkScenario:
         g.add_edge(ord_n.id, ship.id, EdgeType.RELATES_TO, "Rel")
         return g
 
+    def simulated_carrier_response(g):
+        # The benchmark must produce the same typed provenance and shipment
+        # relationship as a real graph. A floating observation is not evidence
+        # for this shipment.
+        obs = g.add_node(
+            NodeType.OBSERVATION, "USPS Delivered (Front Door Drop)",
+            {"status": "DELIVERED", "has_signature": False,
+             "delivered_to_address": {"postal_code": "97477"}},
+            "SIMULATED_CARRIER", origin=EvidenceOrigin.SYNTHETIC_FIXTURE,
+            verification_status=EvidenceVerificationStatus.VERIFIED,
+        )
+        shipment = g.get_nodes_by_type(NodeType.SHIPMENT)[0]
+        g.add_edge(obs.id, shipment.id, EdgeType.DERIVED_FROM,
+                   "Simulated carrier status; NOT independent verification")
+
+    def simulated_signature(g):
+        # Explicitly a simulated, shipment-linked handoff document. A
+        # merchant-uploaded unverified receipt must not satisfy readiness.
+        receipt = g.add_node(
+            NodeType.EVIDENCE_ITEM, "Simulated Signed Delivery Slip",
+            {"kind": "signature_record", "signature": "Fixture recipient"},
+            "SIMULATED_CARRIER", origin=EvidenceOrigin.SYNTHETIC_FIXTURE,
+            verification_status=EvidenceVerificationStatus.VERIFIED,
+        )
+        shipment = g.get_nodes_by_type(NodeType.SHIPMENT)[0]
+        g.add_edge(receipt.id, shipment.id, EdgeType.RELATES_TO,
+                   "Simulated fixture handoff; NOT independent verification")
+
     effects = {
-        "act_carrier_lookup": lambda g: g.add_node(
-            NodeType.OBSERVATION,
-            "USPS Delivered (Front Door Drop)",
-            {"status": "DELIVERED", "has_signature": False, "delivered_to_address": {"postal_code": "97477"}},
-            "CARRIER_USPS_GATEWAY",
-            origin=EvidenceOrigin.SYNTHETIC_FIXTURE,
-            verification_status=EvidenceVerificationStatus.VERIFIED,
-        ),
-        "act_request_signature_or_proof": lambda g: g.add_node(
-            NodeType.EVIDENCE_ITEM,
-            "Signed Delivery Slip & GPS Coordinates",
-            {"signature": "S. Connor", "gps": "44.0462,-123.0220"},
-            "MERCHANT_FULFILLMENT",
-            origin=EvidenceOrigin.USER_SUBMITTED,
-            verification_status=EvidenceVerificationStatus.VERIFIED,
-        ),
+        "act_carrier_lookup": simulated_carrier_response,
+        "act_request_signature_or_proof": simulated_signature,
     }
     return BenchmarkScenario(gt, setup, effects)
 

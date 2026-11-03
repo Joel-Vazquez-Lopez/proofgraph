@@ -90,6 +90,15 @@ class ActionType(str, Enum):
     ESCALATE_HUMAN_REVIEW = "ESCALATE_HUMAN_REVIEW"
 
 
+class ActionLifecycleStatus(str, Enum):
+    RECOMMENDED = "RECOMMENDED"
+    REQUESTED = "REQUESTED"
+    SUBMITTED = "SUBMITTED"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    EXHAUSTED = "EXHAUSTED"
+
+
 class GraphNode(BaseModel):
     id: str
     type: NodeType
@@ -129,6 +138,11 @@ class CandidateAction(BaseModel):
     utility_score: float
     rationale: str
     required_inputs: List[str] = Field(default_factory=list)
+    lifecycle_status: ActionLifecycleStatus = ActionLifecycleStatus.RECOMMENDED
+    responsible_party: Optional[str] = None
+    required_artifact: Optional[str] = None
+    execution_channel: Optional[str] = None
+    completion_criteria: Optional[str] = None
 
 
 class PolicyDecision(BaseModel):
@@ -238,6 +252,8 @@ class InvestigationReport(BaseModel):
     data_source: DataSourceType
     executive_summary: str
     verified_facts: List[str]
+    # Additive, demo-specific report field; never counted as external corroboration.
+    simulated_facts: List[str] = Field(default_factory=list)
     unresolved_questions: List[str]
     identified_contradictions: List[str]
     missing_evidence_inventory: List[str]

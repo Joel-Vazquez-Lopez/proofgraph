@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import {
   GitBranch,
   History,
@@ -36,6 +36,8 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
   onSelectNode,
 }) => {
   const [activeSubTab, setActiveSubTab] = useState<"graph" | "timeline" | "diagnostics">("graph");
+
+  useEffect(() => { if (isOpen) setActiveSubTab("graph"); }, [isOpen]);
 
   if (!dispute) return null;
 
@@ -73,7 +75,7 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
               </span>
             </div>
             <p className="text-xs text-slate-500">
-              Evidence graph ({nodes.length} items), source records, and activity history for this case
+              Evidence graph ({nodes.length} nodes, {edges.length} relationships), source records, and activity history for this case
             </p>
           </div>
         </div>
@@ -137,6 +139,7 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
           {/* TAB 1: Evidence Graph View with Node Inspector */}
           {activeSubTab === "graph" && (
             <div className="space-y-4">
+              <p className="text-xs text-slate-700 rounded-lg bg-indigo-50 border border-indigo-100 p-3">Follow the links between party claims and source records. Red edges mark contradictions requiring review; AI-generated nodes are hypotheses, not verified evidence. Select a node to inspect its origin and underlying data.</p>
               <div className="grid grid-cols-1 lg:grid-cols-12 gap-4">
                 {/* Graph Canvas */}
                 <div className={`${selectedNode ? "lg:col-span-8" : "lg:col-span-12"} transition-all duration-200`}>
@@ -282,9 +285,11 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
                 </span>
                 <div className="mt-3 space-y-2 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-slate-600">Expected info gain:</span>
+                    <span className="text-slate-600">Information gain:</span>
                     <span className="font-mono font-bold text-indigo-700">
-                      {(policy?.chosen_action?.expected_information_gain ?? 0).toFixed(2)}
+                      {(policy?.chosen_action?.expected_information_gain ?? 0) > 0
+                        ? (policy?.chosen_action?.expected_information_gain ?? 0).toFixed(2)
+                        : "Not estimated"}
                     </span>
                   </div>
                   <div className="flex items-center justify-between">
@@ -300,7 +305,7 @@ export const AdvancedWorkspace: React.FC<AdvancedWorkspaceProps> = ({
                     </span>
                   </div>
                   <p className="text-[10px] text-slate-400 italic pt-1">
-                    Scores are heuristic estimates used to rank next actions. They are not calibrated probabilities.
+                    These are internal action-ranking values, not confidence scores or calibrated probabilities. "Not estimated" means information gain was not calculated.
                   </p>
                 </div>
               </div>

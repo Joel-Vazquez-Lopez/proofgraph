@@ -69,36 +69,21 @@ export const CaseList: React.FC<CaseListProps> = ({
       statusIcon = <Clock className="w-3 h-3 text-blue-700" />;
     }
 
-    // Dynamic, plain-English one-line explanation of what is needed
-    let oneLineNeed = "Gathering transaction records";
-    if (d.dispute_id === "PP-D-INR-8841") {
-      oneLineNeed = isReady
-        ? "All delivery records gathered; ready for adjudicator review"
-        : "Need shipping tracking number from seller to check delivery";
-    } else if (d.dispute_id === "PP-D-INR-9923") {
-      oneLineNeed = "Delivery address does not match order destination (Seattle vs Portland)";
-    } else if (d.dispute_id === "PP-D-SNAD-3012") {
-      oneLineNeed = "Need photos of the delivered watch to verify condition claim";
-    } else if (d.dispute_id === "PP-D-DUP-4044") {
-      oneLineNeed = "Checking transaction ledger for duplicate settlement record";
-    } else {
-      if (isReady) oneLineNeed = "Ready for human review";
-      else if (isReview) oneLineNeed = "Human review needed to resolve evidence discrepancy";
-      else if (isAwaiting) oneLineNeed = "Waiting for information from seller or carrier";
-    }
+    // Summary contract contains category/state, but not the full next action.
+    // Avoid fixture-ID copy that stays misleading after a successful investigation.
+    let oneLineNeed = "Review the latest investigation details and recommended step.";
+    if (isReady) oneLineNeed = "Evidence gathered; open for a human review.";
+    else if (isReview) oneLineNeed = "Conflicting or incomplete evidence needs human review.";
+    else if (d.category === "ITEM_NOT_RECEIVED")
+      oneLineNeed = "Review tracking and delivery evidence for this order.";
+    else if (d.category === "SIGNIFICANTLY_NOT_AS_DESCRIBED")
+      oneLineNeed = "Review the condition claim and supporting documents.";
+    else if (d.category === "DUPLICATE_TRANSACTION")
+      oneLineNeed = "Review transaction records for a possible duplicate charge.";
+    else if (d.category === "UNAUTHORIZED_TRANSACTION")
+      oneLineNeed = "Review authorization evidence and account security details.";
 
-    // Default item name fallback if not present
-    const productName = d.item_name || (
-      d.dispute_id === "PP-D-INR-8841"
-        ? "Keychron Q1 Pro Mechanical Keyboard"
-        : d.dispute_id === "PP-D-INR-9923"
-        ? "Sony WH-1000XM5 Noise Canceling Headphones"
-        : d.dispute_id === "PP-D-SNAD-3012"
-        ? "1972 Vintage Chronograph Watch"
-        : d.dispute_id === "PP-D-DUP-4044"
-        ? "Pro Cloud Hosting (Annual)"
-        : "Purchased Item"
-    );
+    const productName = d.item_name || "Item not specified";
 
     const buyerDisplayName = d.buyer_name || d.buyer_id.replace(/^payer_/, "").replace(/_\d+$/, "").replace(/_/g, " ");
 
@@ -155,6 +140,7 @@ export const CaseList: React.FC<CaseListProps> = ({
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search by product, buyer, or case..."
+          aria-label="Search dispute cases"
           className="w-full pl-8 pr-3 py-1.5 text-xs rounded-xl border border-slate-200 bg-slate-50/70 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600 transition-all placeholder:text-slate-400"
         />
       </div>
@@ -198,8 +184,8 @@ export const CaseList: React.FC<CaseListProps> = ({
       {/* Case List Cards */}
       <div className="space-y-2.5 pt-1">
         {filteredDisputes.length === 0 ? (
-          <div className="text-center py-8 text-xs text-slate-400">
-            No dispute cases match your current filter.
+          <div className="text-center py-8 text-xs text-slate-500">
+            {disputes.length ? "No cases match these filters." : "No cases are available for this account."}
           </div>
         ) : (
           filteredDisputes.map((d) => {
@@ -207,10 +193,12 @@ export const CaseList: React.FC<CaseListProps> = ({
             const meta = getHumanCaseMeta(d);
 
             return (
-              <div
+              <button
                 key={d.dispute_id}
+                type="button"
+                aria-current={isSelected ? "true" : undefined}
                 onClick={() => onSelectCase(d.dispute_id)}
-                className={`p-3.5 rounded-xl border text-left cursor-pointer transition-all duration-150 relative ${
+                className={`w-full p-3.5 rounded-xl border text-left cursor-pointer transition-all duration-150 relative focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-600 ${
                   isSelected
                     ? "border-blue-600 bg-blue-50/50 shadow-sm ring-1 ring-blue-600"
                     : "border-slate-200/80 hover:border-slate-300 bg-white hover:shadow-sm"
@@ -222,7 +210,7 @@ export const CaseList: React.FC<CaseListProps> = ({
                     {meta.productName}
                   </h3>
                   <span className="text-xs font-extrabold text-slate-900 shrink-0 font-mono">
-                    ${d.amount.toFixed(2)}
+                    {d.amount.toFixed(2)} {d.currency}
                   </span>
                 </div>
 
@@ -254,7 +242,7 @@ export const CaseList: React.FC<CaseListProps> = ({
                     <ChevronRight className="w-3 h-3" />
                   </span>
                 </div>
-              </div>
+              </button>
             );
           })
         )}

@@ -1,166 +1,182 @@
-# PayPal AI Dispute Investigator
+<div align="center">
 
-[![Project Status: Hackathon Prototype](https://img.shields.io/badge/Status-Hackathon_Prototype-orange.svg)](docs/phase-2-audit.md)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Python 3.13+](https://img.shields.io/badge/python-3.13+-blue.svg)](https://www.python.org/downloads/)
-[![Next.js 15](https://img.shields.io/badge/Next.js-15-black.svg)](https://nextjs.org/)
-[![FastAPI](https://img.shields.io/badge/FastAPI-0.115+-009688.svg)](https://fastapi.tiangolo.com/)
+# ProofGraph
 
-> **Submission Project for PayPal AI Hackathon 2026**  
-> **Core Principle:** The AI asks fewer, better questions, grounds its conclusions in verifiable evidence, and explicitly acknowledges uncertainty.
+### Evidence-first AI assistance for payment dispute investigations
 
----
+**Turn conflicting claims into an auditable evidence graph. Identify what is missing. Ask for the next useful piece of evidence.**
 
-## 1. Product Vision & Architecture
+[![Prototype](https://img.shields.io/badge/status-hackathon%20prototype-334155)](#scope-and-safety) [![MIT](https://img.shields.io/badge/license-MIT-2563eb)](LICENSE) [![Next.js 15](https://img.shields.io/badge/frontend-Next.js%2015-111827)](apps/web) [![FastAPI](https://img.shields.io/badge/backend-FastAPI-059669)](apps/api)
 
-Payment disputes frequently devolve into cumbersome, asynchronous document dumps between buyers, merchants, and PayPal adjudicators. Existing dispute automation tools (e.g. Chargeflow) treat disputes as passive PDF templating exercises.
+[**Run locally**](#run-the-project) · [**Workflow**](#how-proofgraph-works) · [**Architecture**](#architecture) · [**Safety**](#scope-and-safety) · [**Tests**](#testing-and-reproducibility)
 
-The **PayPal AI Dispute Investigator** introduces an active, graph-grounded investigation platform:
-
-1. **Understands the dispute & isolates claims:** Extracts factual claims from buyer statements and merchant logs.
-2. **Constructs a Typed Evidence Graph:** Models claims, transactions, orders, shipments, observations, and contradictions using NetworkX and persistent SQL storage.
-3. **Next-Best-Evidence (NBE) Selection:** Computes information gain, relevance, and acquisition friction to request the **single most informative piece of evidence** rather than blasting users with generic checklists.
-4. **Isolates Contradictions:** Maps discrepancy edges (e.g. carrier delivery address contradicting the order shipping destination).
-5. **Calibrated Image & Document Integrity:** Fingerprints evidence with SHA-256, inspects file magic bytes (JPEG, PNG, WEBP, PDF), and flags potential alteration indicators with probabilistic humility.
-6. **Deterministic Decision-Readiness Evaluator:** Evaluates dispute-category criteria (Item Not Received, SNAD, Duplicate Charge).
-7. **Prepares Auditable Packages:** Produces provenance-linked dossiers for human or PayPal adjudicators.
-
-> ⚠️ **Non-Negotiable Safety Principle:** The AI never unilaterally determines dispute outcomes, moves funds, or auto-refunds. Consequential adjudication is reserved exclusively for authenticated humans or official PayPal reviewers.
+</div>
 
 ---
 
-## 2. Repository Structure
+> **PayPal AI Hackathon 2026 submission candidate.** ProofGraph is an independent prototype, not an official PayPal product. Showcased disputes are synthetic. The application does not autonomously adjudicate disputes, issue refunds, or move funds.
 
-```text
-paypal-dispute-investigator/
-├── apps/
-│   ├── web/                    # Next.js 15 dashboard & React Flow visualization
-│   └── api/                    # FastAPI backend, state machine, graph engine, security
-│       ├── app/security/       # RBAC authorization & streaming upload validation
-│       └── app/services/       # Carrier gateway, graph engine, NBE policies, evaluator
-├── packages/
-│   └── shared_schemas/         # Typed Pydantic models for graph, NBE & reports
-├── docs/
-│   ├── paypal-capability-audit.md  # Official PayPal REST API audit & limitations
-│   ├── benchmark-methodology.md    # Multi-turn benchmark design & empirical results
-│   ├── phase-2-audit.md            # Correctness, provenance & security verification audit
-│   ├── competitive-analysis.md     # Chargeflow & market comparison
-│   ├── architecture.md             # System architecture & state machine
-│   └── security-model.md           # Zero-trust upload & prompt isolation
-├── benchmarks/
-│   └── run_benchmark.py        # Independent scenario-based simulation benchmark (Scenarios A-E)
-├── fixtures/                   # Deterministic offline scenario fixtures
-├── docker-compose.yml          # Multi-container local orchestration
-├── pytest.ini                  # Pytest runner configuration
-└── README.md
+## The problem
+
+A dispute is rarely a single missing document. Buyers, merchants, orders, tracking records, and supporting files may tell different stories. A fixed checklist can request unnecessary evidence while overlooking the contradiction that matters.
+
+**ProofGraph turns a dispute into a structured investigation rather than a document collection exercise.** It preserves where assertions came from, distinguishes claims from independently verified observations, and recommends the next useful evidence request without hiding uncertainty.
+
+## Product walkthrough
+
+| Experience | What it demonstrates |
+| --- | --- |
+| **Case overview** | Dispute summary, available evidence, and recommended next step |
+| **Evidence graph** | Typed entities and relationships with provenance and verification status |
+| **Add evidence** | Submit tracking or a supporting file while preserving the previous evidence trail |
+| **Contradiction analysis** | Surface conflicts such as order-destination versus reported-delivery mismatch |
+| **AI-assisted extraction** | Reviewer-initiated, quote-grounded assertions labeled as unverified model inferences |
+| **Review package** | Prepare an auditable dossier for human review; no automatic PayPal submission |
+
+<!-- Add actual screenshots here after capture; do not use illustrative or fabricated UI images. -->
+<!-- Add the public demo video URL after publication. -->
+
+## How ProofGraph works
+
+1. **Ingest the dispute.** Load a synthetic scenario or use the separate PayPal Sandbox adapter with appropriate credentials and permissions.
+2. **Represent evidence.** Build a typed graph of orders, transactions, participants, claims, shipments, and observations.
+3. **Preserve provenance.** User-entered tracking remains `USER_SUBMITTED / UNVERIFIED`; it does not become independent carrier proof by appearing in the graph.
+4. **Identify gaps and contradictions.** Apply category-aware checks for Item Not Received, Significantly Not As Described, and Duplicate Charge.
+5. **Recommend the next action.** A deterministic next-best-evidence policy selects a focused request or human escalation.
+6. **Assist, don't adjudicate.** Optional Gemini extraction proposes source-grounded assertions but cannot override deterministic readiness.
+7. **Prepare human review.** Generate a provenance-linked investigation report.
+
+## Architecture
+
+```mermaid
+flowchart TD
+    A[Next.js investigation workspace] --> B[FastAPI application]
+    B --> C[Dispute service and state machine]
+    C --> D[Typed evidence graph]
+    C --> E[Decision-readiness evaluator]
+    C --> F[Next-best-evidence policy]
+    B --> G[Reviewer-initiated AI extraction]
+    G --> H[Gemini / optional OpenAI]
+    B --> I[(SQLite persistence)]
+    J[Synthetic dispute fixtures] --> C
+    K[PayPal Sandbox REST adapter] -. Credentialed integration .-> C
+    D --> L[Human review package]
+    E --> L
+    F --> L
 ```
 
----
+**Stack:** Next.js 15, React, React Flow, FastAPI, Pydantic, SQLAlchemy, NetworkX, SQLite, and optional Gemini/OpenAI APIs.
 
-## 3. PayPal REST API Integration Status
+### PayPal integration: precise status
 
-Our implementation adheres to strict classification standards documented in [`docs/paypal-capability-audit.md`](docs/paypal-capability-audit.md):
+ProofGraph includes a PayPal Sandbox REST client for OAuth, dispute listing/details, and a provide-evidence API method. **The showcased end-to-end investigations use synthetic fixtures**, not live PayPal adjudication. Sandbox calls require separately configured credentials and permissions. No PayPal credentials are included.
 
-| PayPal Capability | Official REST API | Status in Platform |
-| :--- | :--- | :--- |
-| **OAuth 2.0 Auth** | `POST /v1/oauth2/token` | **VERIFIED CLIENT** (Sandbox token retrieval & caching) |
-| **List Disputes** | `GET /v1/customer/disputes` | **DOCUMENTED** (Filtered by `dispute_state`, `reason`) |
-| **Get Dispute Details** | `GET /v1/customer/disputes/{id}` | **DOCUMENTED** (Parsed into evidence graph) |
-| **Provide Evidence** | `POST /v1/customer/disputes/{id}/provide-evidence` | **DOCUMENTED** (Fulfillment & tracking payloads) |
-| **Dispute Adjudication** | *Internal PayPal only* | **UNAVAILABLE / SIMULATED** (AI prepares handoff dossier) |
-| **Offline Scenarios** | *Local test harness* | **VERIFIED** (`SyntheticDisputeAdapter` with explicit provenance tags) |
+The [PayPal capability audit](docs/paypal-capability-audit.md) and [Sandbox verification notes](docs/paypal-sandbox-verification.md) distinguish implemented client methods, documented endpoints, and independently verified live behavior.
 
----
+## Run the project
 
-## 4. Quickstart: Running Locally
+### Full interactive local demo
 
-### Prerequisites
-- Python 3.12+ (Python 3.13 supported)
-- Node.js 18+ (Node 20+ recommended)
-- Git
+Requirements: Python 3.12+, Node.js 20+, and Git. Open two terminals in the repository root.
 
-### A. Start the Backend API
+**Terminal 1 — FastAPI**
 
 ```bash
-cd apps/api
-
-# 1. Create and activate virtual environment
-python3 -m venv .venv
-source .venv/bin/activate
-
-# 2. Install dependencies
-pip install -r requirements.txt
-
-# 3. Start FastAPI server
-uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+python3 -m venv apps/api/.venv
+apps/api/.venv/bin/python -m pip install -r apps/api/requirements.txt
+PYTHONPATH="$PWD:$PWD/apps/api" apps/api/.venv/bin/python -m uvicorn app.main:app --app-dir apps/api --host 127.0.0.1 --port 8000
 ```
 
-*The API is now live at `http://localhost:8000` (Swagger docs: `http://localhost:8000/docs`).*
-
-### B. Start the Web Dashboard
+**Terminal 2 — Next.js**
 
 ```bash
 cd apps/web
-
-# 1. Install dependencies
-npm install
-
-# 2. Start Next.js development server
+npm ci
 npm run dev
 ```
 
-*The dashboard is now live at `http://localhost:3000`.*
+Open **http://localhost:3000**. Next.js proxies `/api/v1/*` requests to the backend on port 8000.
 
----
+Synthetic fixtures are used by default. Evidence changes persist to local SQLite; start with a fresh database for a clean judging run. Do not upload real customer data.
 
-## 5. Verification: Running Automated Tests
+### Docker showcase (deployment branch)
 
-Run the full backend test suite covering state machine transitions, graph contradictions, NBE heuristics, image integrity, evidence provenance, adaptive scenarios (A–E), security tenancy, and the vertical slice API:
-
-```bash
-# From repository root
-apps/api/.venv/bin/pytest -v
-```
-
-Expected result:
-```text
-======================== 33 passed, 2 warnings in 0.58s ========================
-```
-
----
-
-## 6. Running the Empirical Benchmark
-
-Execute the multi-turn scenario simulation benchmark across Scenarios A through E:
+A read-only Docker showcase has been tested locally on the separate `deploy/huggingface-space` development branch. **The Dockerfile is not yet committed to this branch**, so the following commands apply only after the deployment files are published:
 
 ```bash
-# From repository root
-apps/api/.venv/bin/python3 benchmarks/run_benchmark.py
+docker build -t proofgraph-demo .
+docker run --rm -p 7860:7860 proofgraph-demo
 ```
 
-### Empirical Benchmark Summary ($N=5$ Canonical Scenarios)
+Open **http://localhost:7860**. The public-showcase configuration rejects state-changing requests; it is not the full interactive demo. Do not treat this as a production security boundary.
 
-| Policy | Mean Steps | Mean Human Questions | Mean Irrelevant Questions | Critical Coverage | Escalation Accuracy | Readiness Accuracy | Safety Violations |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Fixed Checklist** | 5.0 | 5.0 | 9.0 | 68.3% | 40.0% | 80.0% | 0 |
-| **Random / Unguided** | 5.0 | 4.8 | 5.4 | 73.3% | 40.0% | 80.0% | 0 |
-| **Heuristic NBE (Ours)** | **2.2** | **0.6** | **0.0** | **78.3%** | **100.0%** | **100.0%** | **0** |
+### Optional AI configuration
 
-*See [`docs/benchmark-methodology.md`](docs/benchmark-methodology.md) for full experimental setup and analysis.*
+Set `GEMINI_API_KEY` in a local ignored `.env` or server-side process environment, **never in committed source or frontend configuration**. Extraction is reviewer-initiated. Missing credentials produce a fallback, not fabricated live AI output. See [AI configuration and privacy constraints](docs/issue18-real-ai-extraction.md).
+
+## Suggested judging walkthrough
+
+1. Open the **Keychron Item Not Received** synthetic case and inspect the recommendation.
+2. Explore its evidence graph and distinguish buyer/seller claims from carrier-related observations.
+3. Add a **synthetic tracking number**. Confirm the new shipment is **user-submitted and unverified**, with the original shipment preserved.
+4. Open the **Sony Item Not Received** case for the delivery-destination contradiction and human-review escalation.
+5. Explore a **SNAD** or **Duplicate Charge** case for category-specific evidence requirements.
+6. Optionally run reviewer-initiated Gemini extraction with your own credentials; inspect exact source quotes and unverified AI provenance.
+7. Open the review package. It is **prepared for human review**, not submitted to PayPal.
+
+See the [full acceptance checklist](docs/final-local-acceptance.md).
+
+## Testing and reproducibility
+
+Backend, from the repository root after installing dependencies:
+
+```bash
+PYTHONPATH="$PWD:$PWD/apps/api" apps/api/.venv/bin/python -m pytest apps/api/tests -q
+```
+
+Frontend, from `apps/web`:
+
+```bash
+npm test
+npm run build
+npx playwright test --workers=1 --reporter=line
+```
+
+The prototype has passed local backend, frontend, browser, build, and Docker checks. **This does not claim hosted CI or public deployment success.** See [benchmark methodology](docs/benchmark-methodology.md) for synthetic evaluation design and limitations; fixture metrics are not real-world accuracy estimates.
+
+## Scope and safety
+
+- **Synthetic by default.** Demonstration cases are fixtures, not customer disputes.
+- **No autonomous financial actions.** No refunds, money movement, or autonomous adjudication.
+- **Provenance is explicit.** User submissions, model inferences, and simulated carrier telemetry must not be conflated with independent verification.
+- **Human review remains authoritative.** Reports and recommendations support reviewers rather than replacing them.
+- **Development authentication is not production identity.** The interactive demo uses a lightweight role model. Do not expose it publicly without proper authentication, tenant isolation, rate limiting, and storage controls.
+- **Public read-only mode is limited.** The deployment prototype blocks non-read HTTP methods; that alone is not a complete security assessment.
+- **Keep secrets and evidence private.** Never commit `.env` files, API keys, real customer information, or uploaded documents.
+
+See the [security model](docs/security-model.md) and [project audit](docs/phase-2-audit.md).
+
+## Repository guide
+
+| Path | Purpose |
+| --- | --- |
+| [`apps/web`](apps/web) | Next.js dashboard and graph visualization |
+| [`apps/api`](apps/api) | FastAPI routes, adapters, state machine, and investigation services |
+| [`packages/shared_schemas`](packages/shared_schemas) | Typed domain models |
+| [`fixtures`](fixtures) | Deterministic synthetic scenarios |
+| [`benchmarks`](benchmarks) | Scenario-based policy evaluation |
+| [`docs`](docs) | Architecture, audits, methodology, and security |
+
+## Hackathon submission
+
+Built for the [PayPal AI Hackathon 2026](https://paypalaihackathon.devpost.com/). The public video and any hosted demo links will be added after they are available.
+
+**License:** [MIT](LICENSE).
 
 ---
 
-## 7. Evidence Provenance & Adaptive Investigation (Phase 2)
+<div align="center">
 
-1. **Elimination of Fabricated Verified Telemetry:**
-   A tracking number submitted by a merchant is strictly labeled `origin=USER_SUBMITTED` and `status=UNVERIFIED`. It can never become verified delivery evidence without an explicit, independent carrier verification event.
-2. **Cross-Environment Safety Boundary:**
-   Disputes originating from `PAYPAL_SANDBOX` are strictly blocked from silently querying synthetic carrier fixtures. If external carrier credentials are unconfigured, uncertainty is explicitly preserved.
-3. **Adaptive Investigation Scenarios:**
-   - **Scenario A (Confirmed Delivery vs Buyer Non-Receipt):** When carrier reports residence delivery without signature and buyer disputes receipt, the investigator does not dismiss the buyer's claim. It identifies open delivery questions (signature/drop photo) before deciding readiness.
-   - **Scenario B (In-Transit / Weather Exception):** Prioritizes automated transit monitoring and preserves in-transit status without demanding irrelevant buyer documents.
-   - **Scenario C (Unverified Tracking):** Preserves uncertainty when tracking returns `NOT_FOUND` and requests physical merchant drop-off receipts.
-   - **Scenario D (Contradiction):** Detects address mismatches (e.g. Seattle 98101 vs. Portland 97201), requests targeted clarification, and escalates to human review.
-   - **Scenario E (Insufficient Evidence):** Prevents infinite polling loops when merchant fulfillment evidence is unavailable, triggering clean human escalation.
-4. **Security & Tenancy Enforcement:**
-   Role-based access control (`BUYER`, `MERCHANT`, `REVIEWER`, `SYSTEM_ADMIN`) prevents cross-case data leakage. File uploads enforce streaming 10 MB limits, magic byte inspection (JPEG, PNG, WEBP, PDF), and path traversal sanitization.
+**ProofGraph** · Evidence first. Uncertainty visible. Humans in control.
+
+</div>
