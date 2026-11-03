@@ -35,6 +35,8 @@ export function AIClaimsPanel({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const uniqueQuestions = result ? Array.from(new Set(result.claims.map((claim) => claim.evidence_question.trim()).filter(Boolean))) : [];
+
   const analyze = async () => {
     if (busy) return;
     setBusy(true);
@@ -93,6 +95,15 @@ export function AIClaimsPanel({
           <p className="font-medium text-amber-800">
             {result.provenance}. Verbatim quotes are party statements, not established facts.
           </p>
+          {result.claims.length > 0 && (
+            <div className="rounded-lg border border-indigo-200 bg-indigo-50 p-3 space-y-2">
+              <h4 className="font-bold text-indigo-950">Evidence questions suggested by AI</h4>
+              <p className="text-indigo-800">Grouped from {result.claims.length} candidate assertions into {uniqueQuestions.length} distinct question(s). These are suggestions, not verified findings or the next investigation decision.</p>
+              <ul className="list-disc pl-5 space-y-1 text-indigo-950">
+                {uniqueQuestions.map((question) => <li key={question}>{question}</li>)}
+              </ul>
+            </div>
+          )}
           {result.claims.map((claim, index) => (
             <article key={claim.inference_node_id || index}
               className="rounded-lg border border-amber-200 bg-amber-50/50 p-3 space-y-1.5">
@@ -101,7 +112,7 @@ export function AIClaimsPanel({
               <p className="text-slate-600">
                 Exact source: <code className="font-mono">{claim.source_id}</code>
               </p>
-              <p className="text-slate-700">Possible evidence question: {claim.evidence_question}</p>
+              <p className="text-slate-600">Evidence question shown in the grouped suggestions above.</p>
               {claim.inference_node_id && (
                 <p className="text-slate-500">
                   Graph node: <code className="font-mono">{claim.inference_node_id}</code> ·
