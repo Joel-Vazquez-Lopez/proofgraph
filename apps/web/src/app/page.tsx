@@ -100,6 +100,11 @@ export default function ProofGraphPage() {
 
   // ── UI State ─────────────────────────────────
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const graphSectionRef = useRef<HTMLDivElement | null>(null);
+  const openEvidenceGraph = () => {
+    setShowAdvanced(true);
+    requestAnimationFrame(() => graphSectionRef.current?.scrollIntoView({ behavior: "smooth", block: "start" }));
+  };
   const [showReviewModal, setShowReviewModal] = useState(false);
   const [selectedNode, setSelectedNode] = useState<GraphNodeData | null>(null);
 
@@ -356,7 +361,16 @@ export default function ProofGraphPage() {
                   onExtractionComplete={() => fetchDisputeDetail(dispute.dispute_id, true)}
                 />
 
+                <div className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-bold text-indigo-950">Explore the evidence behind this investigation</p>
+                    <p className="text-xs text-indigo-800 mt-1">Trace source records, AI hypotheses, contradictions, and their verification status.</p>
+                  </div>
+                  <button type="button" onClick={openEvidenceGraph} className="rounded-lg bg-indigo-700 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-800 focus-visible:ring-2 focus-visible:ring-indigo-500">View evidence graph</button>
+                </div>
+
                 {/* Progressive disclosure: Evidence Graph, Audit Timeline, Diagnostics */}
+                <div ref={graphSectionRef} className="scroll-mt-24">
                 <AdvancedWorkspace
                   dispute={dispute}
                   isOpen={showAdvanced}
@@ -364,6 +378,7 @@ export default function ProofGraphPage() {
                   selectedNode={selectedNode}
                   onSelectNode={setSelectedNode}
                 />
+                </div>
               </>
             ) : (
               <div className="bg-white rounded-2xl border border-slate-200 p-12 flex flex-col items-center gap-3 text-slate-500">

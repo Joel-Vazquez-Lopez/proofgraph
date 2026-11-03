@@ -38,7 +38,7 @@ test("real backend: merchant investigates, saves tracking, checks carrier, revie
 
   // 1. Select a real seeded item-not-received dispute and understand the claim.
   await openCase(page, "Keychron Q1 Pro");
-  await expect(page.getByText(/I ordered a mechanical keychron keyboard/)).toBeVisible();
+  await expect(page.getByText(/I ordered a mechanical keychron keyboard on Oct 2nd/)).toBeVisible();
   await expect(page.getByText("No tracking information yet")).toBeVisible();
   await expect(page.getByText("Add tracking information")).toBeVisible();
   const before = await getCase(page, "PP-D-INR-8841");
@@ -168,15 +168,13 @@ test("real backend: small-screen navigation, focus and keyboard access", async (
   await expect(page.getByText(/deep diagonal scratch/).first()).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - innerWidth);
   expect(overflow, "No horizontal page overflow at 375px").toBeLessThanOrEqual(2);
-  const trigger = page.getByRole("button", { name: /See case summary|Review updated case summary|Review this issue/ }).first();
+  const trigger = page.getByRole("button", { name: "View evidence graph" });
+  await expect(trigger).toBeVisible();
   await trigger.focus();
-  await page.keyboard.press("Enter");
-  const dialog = page.getByRole("dialog", { name: "Case review package" });
-  await expect(dialog).toBeVisible();
-  await expect(dialog.getByRole("button", { name: "Close review package" })).toBeFocused();
-  await page.keyboard.press("Escape");
-  await expect(dialog).toHaveCount(0);
   await expect(trigger).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("button", { name: /^Evidence graph \(\d+\)$/ })).toBeVisible();
+  await expect(page.getByText(/Follow the links between party claims and source records/)).toBeVisible();
 });
 
 test("real backend: visible loading and recoverable network failure without API stubs", async ({ page }) => {
