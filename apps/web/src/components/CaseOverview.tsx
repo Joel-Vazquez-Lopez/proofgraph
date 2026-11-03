@@ -53,6 +53,7 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
   const [showOriginalStatements, setShowOriginalStatements] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [confirmCheck, setConfirmCheck] = useState(false);
+  const [showAddEvidence, setShowAddEvidence] = useState(false);
 
   if (!dispute) return null;
 
@@ -433,6 +434,90 @@ export const CaseOverview: React.FC<CaseOverviewProps> = ({
           </div>
         </div>
       </div>
+
+
+      <section className="rounded-2xl border border-indigo-200 bg-white p-5 shadow-xs" aria-label="Add evidence">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900">Add evidence</h3>
+            <p className="mt-1 text-xs text-slate-600">
+              Submit supporting records at any time. Merchant-submitted evidence is not independently verified.
+            </p>
+          </div>
+          <button
+            type="button"
+            aria-expanded={showAddEvidence}
+            aria-controls="supplemental-evidence-panel"
+            onClick={() => setShowAddEvidence((value) => !value)}
+            className="rounded-xl bg-indigo-700 px-4 py-2.5 text-xs font-bold text-white hover:bg-indigo-800"
+          >
+            {showAddEvidence ? "Hide evidence forms" : "Add evidence"}
+          </button>
+        </div>
+
+        {showAddEvidence && (
+          <div id="supplemental-evidence-panel" className="mt-4 grid gap-4 border-t border-slate-100 pt-4 md:grid-cols-2">
+            {isItemNotReceived && (
+              <form onSubmit={handleTrackingSubmit} className="space-y-3 rounded-xl border border-slate-200 p-4">
+                <h4 className="text-xs font-bold text-slate-900">Shipping information</h4>
+                <p className="text-xs text-slate-600">Tracking remains merchant-submitted until separately verified.</p>
+
+                <label htmlFor="supplemental-carrier" className="block text-xs font-semibold">Carrier</label>
+                <select
+                  id="supplemental-carrier"
+                  value={carrier}
+                  onChange={(event) => setCarrier(event.target.value)}
+                  className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm"
+                >
+                  <option value="USPS">USPS</option>
+                  <option value="UPS">UPS</option>
+                  <option value="FedEx">FedEx</option>
+                  <option value="DHL">DHL</option>
+                </select>
+
+                <label htmlFor="supplemental-tracking" className="block text-xs font-semibold">Tracking number</label>
+                <input
+                  id="supplemental-tracking"
+                  value={trackingNumber}
+                  onChange={(event) => setTrackingNumber(event.target.value)}
+                  required
+                  className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  placeholder="Synthetic tracking number"
+                />
+
+                <button
+                  type="submit"
+                  disabled={submitting || !trackingNumber.trim()}
+                  className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+                >
+                  {submitting ? "Saving…" : "Save tracking information"}
+                </button>
+              </form>
+            )}
+
+            <form onSubmit={handleFileUpload} className="space-y-3 rounded-xl border border-slate-200 p-4">
+              <h4 className="text-xs font-bold text-slate-900">Supporting document</h4>
+              <p className="text-xs text-slate-600">Upload synthetic evidence. Documents remain merchant-submitted and unverified.</p>
+
+              <label htmlFor="supplemental-document" className="block text-xs font-semibold">Select file</label>
+              <input
+                id="supplemental-document"
+                type="file"
+                onChange={(event) => setSelectedFile(event.target.files?.[0] || null)}
+                className="block w-full text-xs"
+              />
+
+              <button
+                type="submit"
+                disabled={uploading || !selectedFile}
+                className="rounded-lg bg-slate-900 px-4 py-2 text-xs font-bold text-white disabled:opacity-50"
+              >
+                {uploading ? "Saving…" : "Save document"}
+              </button>
+            </form>
+          </div>
+        )}
+      </section>
 
       {/* SECTION 3: WHAT SHOULD I DO NEXT? — one primary action */}
       <div className="rounded-2xl border p-5 bg-white border-slate-200 shadow-xs">
