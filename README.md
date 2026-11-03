@@ -8,13 +8,15 @@
 
 [![Prototype](https://img.shields.io/badge/status-hackathon%20prototype-334155)](#scope-and-safety) [![MIT](https://img.shields.io/badge/license-MIT-2563eb)](LICENSE) [![Next.js 15](https://img.shields.io/badge/frontend-Next.js%2015-111827)](apps/web) [![FastAPI](https://img.shields.io/badge/backend-FastAPI-059669)](apps/api)
 
-[**Run locally**](#run-the-project) · [**Workflow**](#how-proofgraph-works) · [**Architecture**](#architecture) · [**Safety**](#scope-and-safety) · [**Tests**](#testing-and-reproducibility)
+[**Live demo**](https://proofgraph-83d9.onrender.com) · [**Run locally**](#run-the-project) · [**Workflow**](#how-proofgraph-works) · [**Architecture**](#architecture) · [**Safety**](#scope-and-safety) · [**Tests**](#testing-and-reproducibility)
 
 </div>
 
 ---
 
 > **PayPal AI Hackathon 2026 submission candidate.** ProofGraph is an independent prototype, not an official PayPal product. Showcased disputes are synthetic. The application does not autonomously adjudicate disputes, issue refunds, or move funds.
+
+> **Try the public demo:** [proofgraph-83d9.onrender.com](https://proofgraph-83d9.onrender.com) — a synthetic, read-only showcase. The free hosting instance may take a minute to wake up after inactivity. Evidence submission and AI extraction require the interactive local version.
 
 ## The problem
 
